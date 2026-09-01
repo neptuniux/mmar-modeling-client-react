@@ -17,6 +17,7 @@ import {
   attributeTypeName,
   attributeValueMatchesRegex,
   reportMetamodelViolation,
+  unwrapRegexLiteral,
 } from "./metamodel-constraints";
 
 const FLOAT_REGEX = "^[-+]?[0-9]*\\.?[0-9]+([eE][-+]?[0-9]+)?$";
@@ -46,11 +47,12 @@ describe("attributeValueMatchesRegex", () => {
     expect(attributeValueMatchesRegex("1.5", metaAttribute(INTEGER_REGEX, "Integer"))).toBe(false);
   });
 
-  it("refuses an emptied Float field, because the server does", () => {
-    // The server only skips the test for a value that is null/undefined, not for "".
-    expect(attributeValueMatchesRegex("", metaAttribute(FLOAT_REGEX))).toBe(false);
-    // The Integer regex ends in `*`, so an empty value satisfies that one.
-    expect(attributeValueMatchesRegex("", metaAttribute(INTEGER_REGEX, "Integer"))).toBe(true);
+  it("accepts an unset value, because the server does", () => {
+    // The server skips the test for a real null/undefined and for the sentinel
+    // strings the clients store for an attribute that was never filled in.
+    for (const unset of ["", "   ", "not defined", "undefined"]) {
+      expect(attributeValueMatchesRegex(unset, metaAttribute(FLOAT_REGEX))).toBe(true);
+    }
   });
 
   it("accepts without testing when there is nothing to test with", () => {
@@ -62,6 +64,13 @@ describe("attributeValueMatchesRegex", () => {
     expect(attributeValueMatchesRegex("anything", undefined)).toBe(true);
   });
 
+  it("unwraps a regex entered as a JS literal, as the server does", () => {
+    // The reported case: a user-defined type whose regex_value kept its slashes.
+    expect(attributeValueMatchesRegex("255.255.255.0", metaAttribute("/^(\\d{1,3}\\.){3}\\d{1,3}$/gim", "Mask"))).toBe(true);
+    expect(attributeValueMatchesRegex("HTTP", metaAttribute("/^(tcp|udp|https?)$", "Protocol"))).toBe(true);
+    expect(attributeValueMatchesRegex("carrier pigeon", metaAttribute("/^(tcp|udp|https?)$", "Protocol"))).toBe(false);
+  });
+
   it("accepts when the pattern will not compile, leaving the verdict to the server", () => {
     expect(attributeValueMatchesRegex("anything", metaAttribute("([unclosed"))).toBe(true);
   });
@@ -71,6 +80,17 @@ describe("attributeValueMatchesRegex", () => {
     expect(attributeValueMatchesRegex("1", meta)).toBe(true);
     expect(attributeValueMatchesRegex("2", meta)).toBe(true);
     expect(attributeValueMatchesRegex("3", meta)).toBe(true);
+  });
+});
+
+describe("unwrapRegexLiteral", () => {
+  it("strips a /pattern/flags literal and a stray leading slash, leaving a bare pattern alone", () => {
+    expect(unwrapRegexLiteral("/^(tcp|udp)$/gim")).toBe("^(tcp|udp)$");
+    expect(unwrapRegexLiteral("  /^(tcp|udp)$/  ")).toBe("^(tcp|udp)$");
+    expect(unwrapRegexLiteral("/^(tcp|udp)$")).toBe("^(tcp|udp)$");
+    expect(unwrapRegexLiteral("^[0-9]+$")).toBe("^[0-9]+$");
+    // A pattern that legitimately contains slashes is untouched.
+    expect(unwrapRegexLiteral("^https?:\\/\\/.+$")).toBe("^https?:\\/\\/.+$");
   });
 });
 
