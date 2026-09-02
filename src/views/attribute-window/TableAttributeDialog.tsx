@@ -149,14 +149,32 @@ function TableAttributeDialogView({
       return [];
     });
 
-    // chunk the flat cell list into rows of columns.length
+    // Group the flat cell list by table_row, then place each row's cells under the
+    // column whose meta attribute they belong to (cell.uuid_attribute) rather than
+    // trusting raw array position. The server orders cells by table_row only, so two
+    // cells that share a row (e.g. the "Variable Name" and "Variable Value" columns)
+    // come back in no particular order — chunking by position silently swapped them
+    // whenever the server happened to hand that pair back column-reversed.
+    const cellsByRow = new Map<number, AttributeInstance[]>();
+    for (const cell of tableAttributes) {
+      const bucket = cellsByRow.get(cell.table_row);
+      if (bucket) bucket.push(cell);
+      else cellsByRow.set(cell.table_row, [cell]);
+    }
     const nextRows: AttributeInstance[][] = [];
     if (nextColumns.length > 0) {
-      for (let i = 0; i < tableAttributes.length; i += nextColumns.length) {
-        const row: AttributeInstance[] = [];
-        for (let j = 0; j < nextColumns.length; j++) {
-          row.push(tableAttributes[i + j]);
-        }
+      for (const rowIndex of [...cellsByRow.keys()].sort((a, b) => a - b)) {
+        const cellsInRow = cellsByRow.get(rowIndex)!;
+        const row = nextColumns.map((column) => {
+          const match = cellsInRow.find((cell) => cell.uuid_attribute === column.attribute.uuid);
+          if (!match) {
+            logger.log(
+              `table attribute row ${rowIndex}: no cell for column "${column.attribute.name}"`,
+              "error",
+            );
+          }
+          return match as AttributeInstance;
+        });
         nextRows.push(row);
       }
     }
