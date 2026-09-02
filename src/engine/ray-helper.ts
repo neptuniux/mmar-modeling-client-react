@@ -144,8 +144,8 @@ export class RayHelper {
   }
 
   /**
-   * The nearest point on `toObject` seen from `fromObject`, or undefined when there is
-   * no such point.
+   * The point on `toObject`'s surface that faces `fromObject`, or undefined when one of
+   * the two objects is missing.
    *
    * Both call sites in the animator resolve their objects by walking the scene and cast
    * the result to a Mesh, so either can be undefined — a relation whose endpoints were
@@ -153,23 +153,57 @@ export class RayHelper {
    * for as long as its line is still in `updateLinesArray`. Answering undefined makes
    * the animator skip that line's frame; dereferencing it threw
    * "Cannot read properties of undefined (reading 'getWorldPosition')" once per frame.
+   *
+   * The ray is started just OUTSIDE `toObject` on the `fromObject` side and aimed at the
+   * centre of its geometry rather than fired from `fromObject`'s origin. Firing from the
+   * origin lost the relation ("line not updated: an end point ... could not be resolved")
+   * whenever the two objects overlapped during a drag — the ray then started inside the
+   * target and a single-sided material reports no hit on the way out — and whenever a
+   * vizRep's merged geometry sat off its object origin, so a ray at the origin grazed
+   * past it. If the cast still finds nothing the geometry centre is returned so the
+   * line stays attached to the object instead of freezing where it last resolved.
    */
   shootRayFromObject(fromObject: THREE.Mesh | undefined, toObject: THREE.Mesh | undefined) {
     if (!fromObject || !toObject) return undefined;
 
-    const direction = new THREE.Vector3();
     const fromPosition: THREE.Vector3 = new THREE.Vector3();
     const toPosition: THREE.Vector3 = new THREE.Vector3();
 
-    //we get the world position of the two
+    //we get the world position of the two (also refreshes their world matrices)
     fromObject.getWorldPosition(fromPosition);
     toObject.getWorldPosition(toPosition);
 
-    const adaptedFromPosition = fromPosition;
-    direction.subVectors(toPosition, adaptedFromPosition);
-    this.globalObjectInstance.raycasterBetweenObjects.set(adaptedFromPosition, direction.normalize());
-    const intersects = this.globalObjectInstance.raycasterBetweenObjects.intersectObject(toObject);
+    // Centre and radius of the target's geometry in world space: the centre is what the
+    // ray aims at (robust to geometry that sits off the object origin), the radius is
+    // how far outside the target to start so an overlapping / enclosing fromObject can
+    // never leave the ray origin inside the mesh.
+    const geometry = toObject.geometry;
+    if (!geometry?.getAttribute("position")) return toPosition.clone();
+    if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+    const localSphere = geometry.boundingSphere;
+    if (!localSphere) return toPosition.clone();
+
+    const worldSphere = localSphere.clone().applyMatrix4(toObject.matrixWorld);
+    const targetCentre = worldSphere.center;
+
+    const direction = new THREE.Vector3().subVectors(targetCentre, fromPosition);
+    // fromObject sitting exactly on the target centre: no meaningful direction to cast.
+    if (direction.lengthSq() === 0) return targetCentre.clone();
+    direction.normalize();
+
+    const origin = targetCentre.clone().addScaledVector(direction, -(worldSphere.radius + 1));
+
+    const raycaster = this.globalObjectInstance.raycasterBetweenObjects;
+    // Line2 / LineSegments2 children (relation end markers, nested vizReps) read the
+    // camera off the raycaster and throw when it is unset.
+    raycaster.camera = this.globalObjectInstance.camera;
+    raycaster.set(origin, direction);
+    const intersects = raycaster.intersectObject(toObject, true);
     if (intersects[0]) return intersects[0].point;
+
+    // Nothing was hit (concave / empty geometry, non-raycastable children): the centre
+    // is a good enough anchor and keeps the relation following the object.
+    return targetCentre.clone();
   }
 }
 
