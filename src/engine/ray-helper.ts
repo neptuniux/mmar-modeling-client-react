@@ -160,8 +160,15 @@ export class RayHelper {
    * whenever the two objects overlapped during a drag — the ray then started inside the
    * target and a single-sided material reports no hit on the way out — and whenever a
    * vizRep's merged geometry sat off its object origin, so a ray at the origin grazed
-   * past it. If the cast still finds nothing the geometry centre is returned so the
-   * line stays attached to the object instead of freezing where it last resolved.
+   * past it.
+   *
+   * The cast forces every material on the target double-sided for its duration: a vizRep
+   * that renders BACK-SIDE only (the hollow-shell / flat-disc look) is invisible to the
+   * raycaster on the wall nearest the incoming ray, so the endpoint would otherwise land
+   * on the far wall or, with nothing hit at all, at the centre — the line then reads as
+   * coming out of the middle of the object instead of off its edge. When the cast still
+   * finds nothing the near point of the bounding sphere (facing `fromObject`) is used, so
+   * the line meets the object's silhouette rather than its centre.
    */
   shootRayFromObject(fromObject: THREE.Mesh | undefined, toObject: THREE.Mesh | undefined) {
     if (!fromObject || !toObject) return undefined;
@@ -178,12 +185,13 @@ export class RayHelper {
     // how far outside the target to start so an overlapping / enclosing fromObject can
     // never leave the ray origin inside the mesh.
     const geometry = toObject.geometry;
-    if (!geometry?.getAttribute("position")) return toPosition.clone();
-    if (!geometry.boundingSphere) geometry.computeBoundingSphere();
-    const localSphere = geometry.boundingSphere;
-    if (!localSphere) return toPosition.clone();
-
-    const worldSphere = localSphere.clone().applyMatrix4(toObject.matrixWorld);
+    let worldSphere: THREE.Sphere;
+    if (geometry?.getAttribute("position")) {
+      if (!geometry.boundingSphere) geometry.computeBoundingSphere();
+      worldSphere = geometry.boundingSphere!.clone().applyMatrix4(toObject.matrixWorld);
+    } else {
+      worldSphere = new THREE.Sphere(toPosition.clone(), 0);
+    }
     const targetCentre = worldSphere.center;
 
     const direction = new THREE.Vector3().subVectors(targetCentre, fromPosition);
@@ -191,19 +199,36 @@ export class RayHelper {
     if (direction.lengthSq() === 0) return targetCentre.clone();
     direction.normalize();
 
-    const origin = targetCentre.clone().addScaledVector(direction, -(worldSphere.radius + 1));
+    // Point where the line would meet the object's silhouette — the fallback whenever the
+    // mesh itself yields no intersection.
+    const silhouettePoint = targetCentre.clone().addScaledVector(direction, -worldSphere.radius);
 
+    const origin = targetCentre.clone().addScaledVector(direction, -(worldSphere.radius + 1));
     const raycaster = this.globalObjectInstance.raycasterBetweenObjects;
     // Line2 / LineSegments2 children (relation end markers, nested vizReps) read the
     // camera off the raycaster and throw when it is unset.
     raycaster.camera = this.globalObjectInstance.camera;
     raycaster.set(origin, direction);
-    const intersects = raycaster.intersectObject(toObject, true);
-    if (intersects[0]) return intersects[0].point;
 
-    // Nothing was hit (concave / empty geometry, non-raycastable children): the centre
-    // is a good enough anchor and keeps the relation following the object.
-    return targetCentre.clone();
+    const restoreSides: Array<() => void> = [];
+    toObject.traverse((child) => {
+      const material = (child as THREE.Mesh).material;
+      const materials = Array.isArray(material) ? material : material ? [material] : [];
+      for (const singleMaterial of materials) {
+        const previousSide = singleMaterial.side;
+        restoreSides.push(() => (singleMaterial.side = previousSide));
+        singleMaterial.side = THREE.DoubleSide;
+      }
+    });
+
+    let intersects: THREE.Intersection[];
+    try {
+      intersects = raycaster.intersectObject(toObject, true);
+    } finally {
+      for (const restore of restoreSides) restore();
+    }
+
+    return intersects[0]?.point ?? silhouettePoint;
   }
 }
 
