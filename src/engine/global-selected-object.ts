@@ -69,7 +69,13 @@ export class GlobalSelectedObject {
     this.globalObjectInstance.boxHelper.update();
   }
   removeSelectionBoxHelper() {
-    this.globalObjectInstance.scene.remove(this.globalObjectInstance.boxHelper);
+    // Remove the box from whatever scene actually holds it — NOT from
+    // `globalObject.scene`. Opening a new tab swaps `globalObject.scene` to a fresh
+    // scene without first clearing the selection, so by the time this runs the box
+    // can live in a different (previous) tab's scene; `scene.remove()` would then
+    // miss it, strand it there, and null out the only reference to it — leaving a
+    // red box that can never be cleared.
+    this.globalObjectInstance.boxHelper?.removeFromParent();
     this.globalObjectInstance.boxHelper = undefined as unknown as THREE.BoxHelper;
   }
 }

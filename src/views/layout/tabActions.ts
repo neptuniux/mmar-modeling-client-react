@@ -191,6 +191,10 @@ export async function closeTab(index: number): Promise<void> {
 
   if (newSelected < 0) {
     // No tabs left: reset the engine to an empty scene (mirrors closeTab's else).
+    // Detach the gizmo and pull its helper out of the closed scene — nothing runs
+    // initTransformControls on this path, so it would otherwise linger.
+    globalObject.transformControls?.detach();
+    globalObject.transformControls?.getHelper().removeFromParent();
     globalObject.selectedTab = -1;
     globalObject.scene = new THREE.Scene();
     globalObject.dragObjects = [];

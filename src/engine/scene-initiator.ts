@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 import { globalObject } from "@/engine/global-definition";
+import { globalSelectedObject } from "@/engine/global-selected-object";
 import { transformControlsEvents } from "@/engine/transform-control-events";
 
 /**
@@ -17,6 +18,14 @@ export class SceneInitiator {
 
   async sceneInit() {
     if (this.globalObjectInstance.elementContainer) {
+      // Clear any live selection BEFORE swapping in the new scene, while
+      // `globalObject.scene` still points at the outgoing one. Otherwise the red
+      // selection box (and its refs) are stranded in the old scene and can never
+      // be removed. `switchToTab` already does this for tab switches; opening a
+      // brand-new scene/tab goes straight through here instead.
+      globalSelectedObject.removeObject();
+      this.globalObjectInstance.transformControls?.detach();
+
       this.globalObjectInstance.scene = new THREE.Scene();
 
       //-------------------------------
@@ -50,19 +59,31 @@ export class SceneInitiator {
   }
 
   async initTransformControls() {
-    let oldTransformControls: TransformControls | undefined;
-    //search in scene for transformControls
+    // Tear down the controls that belonged to the previously-active tab.
+    //
+    // What gets added to the scene is `getHelper()` — a `TransformControlsRoot`,
+    // NOT a `TransformControls` (three >=0.169 split them; `TransformControls`
+    // extends `Controls`, not `Object3D`, so it is never in the scene graph at
+    // all). The old `instanceof TransformControls` sweep below therefore never
+    // matched anything, so every tab switch stranded the previous tab's gizmo —
+    // still `attach()`ed to its object and still `visible` — in the old scene,
+    // and leaked the three `pointer*` listeners its constructor put on the canvas.
+    const previous = this.globalObjectInstance.transformControls;
+    if (previous) {
+      previous.detach(); // hides the helper root
+      previous.getHelper().removeFromParent(); // pull it out of whatever scene holds it
+      previous.disconnect(); // drop the canvas pointer listeners the constructor added
+    }
+
+    // Belt and braces: remove any stranded gizmo roots left in the target scene
+    // by an earlier build that didn't clean up.
+    const staleRoots: THREE.Object3D[] = [];
     this.globalObjectInstance.scene.traverse((child: THREE.Object3D) => {
-      if (child instanceof TransformControls) {
-        oldTransformControls = child;
+      if ((child as { isTransformControlsRoot?: boolean }).isTransformControlsRoot) {
+        staleRoots.push(child);
       }
     });
-
-    if (oldTransformControls) {
-      //remove old transformControls from scene.children
-      //(cast: three >=0.169 TransformControls no longer extends Object3D)
-      this.globalObjectInstance.scene.remove(oldTransformControls as any);
-    }
+    staleRoots.forEach((root) => root.removeFromParent());
 
     this.globalObjectInstance.transformControls = new TransformControls(this.globalObjectInstance.camera, this.globalObjectInstance.renderer.domElement);
 
