@@ -27,13 +27,11 @@ import { globalObject, instanceCreationHandler } from "@/engine";
 import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { metaUtility } from "@/resources/services/meta-utility";
-import { expressionUtility } from "@/resources/services/expression-utility";
 import { loadAllSceneInstances } from "@/resources/services/scene-tree-service";
 import { eventBus, type OpenReferenceDialogPayload } from "@/resources/services/event-bus";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 import { useUiStore } from "@/resources/store/uiStore";
-import { NAME_ATTRIBUTE_UUID } from "@/constants";
 
 /**
  * Lets the user point a reference attribute at another instance — a scene, class,
@@ -358,12 +356,14 @@ function AllowedGroup({
 }
 
 // dialog-reference-attribute.ts:299 — the display name of a referenced class instance.
+//
+// Matched by the meta attribute's NAME ("Name"), not by a fixed uuid: every attribute
+// instance carries its meta attribute's name (instanceCreationHandler.
+// createAttributeInstance sets `attribute_instance.name = attribute.name`), but the
+// "Name" attribute's uuid is minted fresh per class by whoever authors the metamodel —
+// there is no single uuid that identifies it across metamodels.
 function getClassInstanceName(classInstance: ClassInstance): string {
-  //anonymous async function
-  return (
-    classInstance.attribute_instance.find((attribute) => attribute.uuid_attribute === NAME_ATTRIBUTE_UUID)
-      ?.value || "Unknown"
-  );
+  return classInstance.attribute_instance.find((attribute) => attribute.name === "Name")?.value || "Unknown";
 }
 
 /**
@@ -397,6 +397,9 @@ async function resolveAttributeRole(attributeInstance: AttributeInstance): Promi
 /**
  * The naming half of `setMetaInformation()`: resolve the referenced instance's display
  * name through the "Name" meta attribute, or the scene instance's own name.
+ *
+ * Looked up by the meta attribute's NAME ("Name"), not by a fixed uuid — see the note
+ * on `getClassInstanceName`, which the same constraint applies to.
  */
 async function resolveReferenceName(roleInstance: RoleInstance): Promise<string> {
   // If the reference role instance has a reference class instance, then get the name of
@@ -404,19 +407,19 @@ async function resolveReferenceName(roleInstance: RoleInstance): Promise<string>
   if (roleInstance.uuid_has_reference_class_instance != undefined) {
     const referenced = await instanceUtility.getClassInstance(roleInstance.uuid_has_reference_class_instance);
     if (referenced) {
-      return (await expressionUtility.attrvalByInst(NAME_ATTRIBUTE_UUID, referenced.uuid)) ?? roleInstance.name;
+      return (await nameAttributeValue(referenced.uuid)) ?? roleInstance.name;
     }
   } else if (roleInstance.uuid_has_reference_relationclass_instance != undefined) {
     const referenced = await instanceUtility.getClassInstance(
       roleInstance.uuid_has_reference_relationclass_instance,
     );
     if (referenced) {
-      return (await expressionUtility.attrvalByInst(NAME_ATTRIBUTE_UUID, referenced.uuid)) ?? roleInstance.name;
+      return (await nameAttributeValue(referenced.uuid)) ?? roleInstance.name;
     }
   } else if (roleInstance.uuid_has_reference_port_instance != undefined) {
     const referenced = await instanceUtility.getPortInstance(roleInstance.uuid_has_reference_port_instance);
     if (referenced) {
-      return (await expressionUtility.attrvalByInst(NAME_ATTRIBUTE_UUID, referenced.uuid)) ?? roleInstance.name;
+      return (await nameAttributeValue(referenced.uuid)) ?? roleInstance.name;
     }
   } else if (roleInstance.uuid_has_reference_scene_instance != undefined) {
     const referenced = await instanceUtility.getSceneInstance(roleInstance.uuid_has_reference_scene_instance);
@@ -427,6 +430,13 @@ async function resolveReferenceName(roleInstance: RoleInstance): Promise<string>
     return "Reference to: ?";
   }
   return roleInstance.name;
+}
+
+/** The value of an instance's "Name" attribute, found by the meta attribute's name
+ * rather than its uuid (see `getClassInstanceName`). Works across class, relationclass
+ * and port instances — whichever kind `instanceUuid` turns out to be. */
+async function nameAttributeValue(instanceUuid: string): Promise<string | undefined> {
+  return (await instanceUtility.getAttributeInstanceFromAnyInstance("Name", instanceUuid, "name"))?.value;
 }
 
 // The four setAllowed*Instances methods: keep only the instances whose meta concept is

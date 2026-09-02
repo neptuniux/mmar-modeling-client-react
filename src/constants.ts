@@ -29,12 +29,6 @@ export const OBJECT_3D_ATTRIBUTE_UUID = "b058b3b4-b523-4ffe-b08e-4f8dda2831c8";
 export const IMAGE_TO_DETECT_ATTRIBUTE_UUID = "d334dd62-5651-4d0f-a7a0-13718f20da36";
 
 /**
- * The meta Attribute "Name". The reference dialog resolves a referenced instance's
- * display name through this attribute.
- */
-export const NAME_ATTRIBUTE_UUID = "d6632c72-89fa-4210-9d01-18e911505608";
-
-/**
  * SceneType "Robotic system" — the table dialog and the simulation window run the
  * robotics algorithms only for scenes of this type.
  */

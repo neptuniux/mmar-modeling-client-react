@@ -578,6 +578,14 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
       null as any,
       null as any,
     );
+    // RoleInstance's constructor has no `name` parameter to forward this to (it never
+    // calls `super(uuid, name)`), so every caller's `role_instance_name` — the
+    // reference dialog's "name_placeholder", the relation role's "role_from for
+    // metaobject: ..." — was silently dropped, leaving `role_instance.name` undefined
+    // until something else happened to resolve and overwrite it.
+    if (role_instance_name) {
+      role_instance.name = role_instance_name;
+    }
 
     //push to log file
     this.logger.log("Role Instance " + role_instance.uuid + " created", "done");

@@ -6,7 +6,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
 import { AttributeInstance, ClassInstance, RoleInstance } from "@gds";
-import { NAME_ATTRIBUTE_UUID } from "@/constants";
 
 const mocks = vi.hoisted(() => ({
   globalObject: {
@@ -25,13 +24,16 @@ const mocks = vi.hoisted(() => ({
     getAllRelationClassInstances: vi.fn(async (): Promise<any[]> => []),
     getAllPortInstances: vi.fn(async (): Promise<any[]> => []),
     getAllSceneInstancesFromLocal: vi.fn(async (): Promise<any[]> => []),
+    // Resolves a referenced instance's "Name" attribute by the meta attribute's NAME —
+    // there is no fixed uuid for it across metamodels (see ReferenceAttributeDialog's
+    // `nameAttributeValue`).
+    getAttributeInstanceFromAnyInstance: vi.fn(async (): Promise<any> => ({ value: "Referenced Task" })),
   },
   metaUtility: {
     getMetaClass: vi.fn(async (): Promise<any> => undefined),
     getMetaPort: vi.fn(async (): Promise<any> => undefined),
     getMetaAttribute: vi.fn(async (): Promise<any> => undefined),
   },
-  expressionUtility: { attrvalByInst: vi.fn(async (): Promise<any> => "Referenced Task") },
   // P12: hybrid-algorithms-service imports the @/engine/global-definition LEAF directly,
   // so it bypasses the `@/engine` barrel mock and drags in a real WebGLRenderer at module
   // scope — this whole file fails to load without the mock below. (Same lesson as P9's
@@ -48,7 +50,6 @@ vi.mock("@/engine", () => ({
 }));
 vi.mock("@/resources/services/instance-utility", () => ({ instanceUtility: mocks.instanceUtility }));
 vi.mock("@/resources/services/meta-utility", () => ({ metaUtility: mocks.metaUtility }));
-vi.mock("@/resources/services/expression-utility", () => ({ expressionUtility: mocks.expressionUtility }));
 
 import ReferenceAttributeDialog from "./ReferenceAttributeDialog";
 import { eventBus } from "@/resources/services/event-bus";
@@ -91,14 +92,19 @@ function referenceAttributeInstance(overrides: Record<string, unknown> = {}): At
   }) as AttributeInstance;
 }
 
-/** A class instance that the Role allows, named through the "Name" meta attribute. */
+/**
+ * A class instance that the Role allows, named through the "Name" meta attribute.
+ * The attribute's uuid is deliberately arbitrary (freshly minted, as a real metamodel
+ * author's would be) — resolution goes through the meta attribute's NAME, not a fixed
+ * uuid, so this must not matter.
+ */
 function allowedClassInstance(): ClassInstance {
   return ClassInstance.fromJS({
     uuid: "ci-target",
     uuid_class: ALLOWED_CLASS_UUID,
     name: "Sub-Process",
     attribute_instance: [
-      { uuid: "ai-name", uuid_attribute: NAME_ATTRIBUTE_UUID, value: "Referenced Task", table_attributes: [] },
+      { uuid: "ai-name", uuid_attribute: "some-metamodel-specific-name-attr-uuid", name: "Name", value: "Referenced Task", table_attributes: [] },
     ],
   }) as ClassInstance;
 }
@@ -126,7 +132,7 @@ beforeEach(() => {
   mocks.instanceUtility.getAllRelationClassInstances.mockResolvedValue([]);
   mocks.instanceUtility.getAllPortInstances.mockResolvedValue([]);
   mocks.instanceUtility.getAllSceneInstancesFromLocal.mockResolvedValue([]);
-  mocks.expressionUtility.attrvalByInst.mockResolvedValue("Referenced Task");
+  mocks.instanceUtility.getAttributeInstanceFromAnyInstance.mockResolvedValue({ value: "Referenced Task" });
   useUiStore.setState({
     dialogs: Object.fromEntries(
       Object.keys(useUiStore.getState().dialogs).map((n) => [n, false]),
