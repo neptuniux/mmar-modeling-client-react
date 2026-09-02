@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Box, Button, Divider, TextField, Typography } from "@mui/material";
+import { Box, Button, Divider, Tab, Tabs, TextField, Typography } from "@mui/material";
 import type { AttributeInstance } from "@gds";
 import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
 import { eventBus, type UploadEventPayload } from "@/resources/services/event-bus";
@@ -14,6 +14,7 @@ import {
   type EnhancedAttributeInstance,
 } from "./attributeModel";
 import PlainAttributeRow from "./PlainAttributeRow";
+import PositionPanel from "./PositionPanel";
 import ReferenceAttributeDialog from "./ReferenceAttributeDialog";
 import TableAttributeDialog from "./TableAttributeDialog";
 import UploadFileDialog from "@/views/dialogs/UploadFileDialog";
@@ -124,6 +125,20 @@ export default function AttributeWindow() {
     groups;
   const hasDynamic = groups.plain.length !== 0 || groups.table.length !== 0 || groups.reference.length !== 0;
 
+  // Position editing applies to a class or port instance — the things with a draggable
+  // mesh behind them. A relation (a line) and the scene fallback have no single position.
+  const positionInstance = currentClassInstance ?? currentPortInstance ?? null;
+
+  // Which panel of the attribute window is showing: 0 = attributes, 1 = position.
+  const [tab, setTab] = useState(0);
+  // A new selection starts back on the attributes panel — the position panel it left
+  // open belonged to the previous object.
+  useEffect(() => {
+    setTab(0);
+  }, [positionInstance?.uuid]);
+  // The position tab is only mounted while its instance is selected; fall back otherwise.
+  const activeTab = positionInstance ? tab : 0;
+
   // `buildAttributeGroups` resolves the selected THREE object back to its class / port /
   // relationclass instance, and falls back to the open scene instance when nothing is
   // selected. All four are null only when no scene is open at all — then there is
@@ -176,6 +191,31 @@ export default function AttributeWindow() {
         />
       )}
 
+      {/* Attributes vs. Position. The Position tab is only offered for a class or port
+          instance — the things with a draggable mesh whose transform this can edit. */}
+      {positionInstance && (
+        <Tabs
+          value={activeTab}
+          onChange={(_e, value: number) => setTab(value)}
+          variant="fullWidth"
+          sx={{ minHeight: 36, mb: 1 }}
+        >
+          <Tab value={0} label="Attributes" sx={{ minHeight: 36, textTransform: "none" }} />
+          <Tab value={1} label="Position" sx={{ minHeight: 36, textTransform: "none" }} />
+        </Tabs>
+      )}
+
+      {activeTab === 1 && positionInstance && (
+        <PositionPanel
+          instanceUuid={positionInstance.uuid}
+          instanceName={positionInstance.name}
+          fallbackCoordinates={positionInstance.coordinates_2d}
+          active={activeTab === 1}
+        />
+      )}
+
+      {activeTab === 0 && (
+        <>
       {hasDynamic && (
         <Typography variant="h6" sx={{ mt: 0, mb: 1.5, p: 0, fontSize: "1rem", fontWeight: 600 }}>
           Dynamic Attributes
@@ -239,6 +279,8 @@ export default function AttributeWindow() {
           ))}
           <Divider sx={{ borderColor: "silver" }} />
         </Box>
+      )}
+        </>
       )}
 
       {/* The dialogs below are rendered once and driven by uiStore, replacing the old

@@ -128,42 +128,7 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
 
     if (this.intersects.length > 0) {
       this.intersect = this.intersects[0];
-      this.globalSelectedObject.setObject(this.intersect.object as THREE.Mesh);
-
-      this.globalObjectInstance.transformControls.attach(this.intersect.object);
-
-      // here we get the attribute instances of the object to add it to the gui
-      const instance_uuid = this.intersect.object.uuid;
-      const class_instance = await this.instanceUtility.getClassInstance(instance_uuid);
-      this.globalObjectInstance.current_class_instance = class_instance as ClassInstance;
-
-      const port_instance = await this.instanceUtility.getPortInstance(instance_uuid);
-      this.globalObjectInstance.current_port_instance = port_instance as PortInstance;
-
-      //check if it is a relationclassinstance
-      if (this.globalObjectInstance.current_class_instance == undefined) {
-        //set relationclass to current current_class_instance
-        const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
-        this.globalObjectInstance.current_class_instance = sceneInstance.relationclasses_instances.find((relationclassInstance) => relationclassInstance.uuid == instance_uuid) as ClassInstance;
-
-        if (this.globalObjectInstance.current_class_instance) {
-          this.logger.log("clicked on relationclass_instance", "info");
-          this.globalStateObject.activeStateLine = this.intersect.object as unknown as Line2;
-        }
-      }
-
-      // Drive the reactive selection store (engine -> store) alongside the bus.
-      let selType: SelectionType = null;
-      if (class_instance) selType = "class";
-      else if (this.globalObjectInstance.current_class_instance) selType = "relationclass";
-      else if (port_instance) selType = "port";
-      useSelectionStore.getState().setSelection(instance_uuid, selType);
-
-      this.eventAggregator.publish("removeAttributeGui");
-      // add eventAggregator for attribute gui -> set small timeout to wait for the removeAttributeGui event which updates also the texts
-      setTimeout(() => {
-        this.eventAggregator.publish("updateAttributeGui");
-      }, 10);
+      await this.selectObject(this.intersect.object as THREE.Mesh);
     } else {
       this.globalSelectedObject.removeObject();
       if (this.intersects.length == 0) {
@@ -182,6 +147,100 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
       this.eventAggregator.publish("removeAttributeGui");
     }
     this.globalObjectInstance.render = true;
+  }
+
+  /**
+   * Select one object: attach the transform gizmo, resolve the picked instance
+   * (class / relationclass / port), drive `current_class_instance` /
+   * `current_port_instance` + `selectionStore`, and refresh the attribute GUI.
+   *
+   * Shared by canvas picking (`onSelectionMode`, passing the raycast hit) and by
+   * `selectInstanceByUuid` (the model-tree panel, passing the object it looked up).
+   */
+  private async selectObject(object: THREE.Mesh) {
+    this.globalSelectedObject.setObject(object);
+    this.globalObjectInstance.transformControls.attach(object);
+
+    // here we get the attribute instances of the object to add it to the gui
+    const instance_uuid = object.uuid;
+    const class_instance = await this.instanceUtility.getClassInstance(instance_uuid);
+    this.globalObjectInstance.current_class_instance = class_instance as ClassInstance;
+
+    const port_instance = await this.instanceUtility.getPortInstance(instance_uuid);
+    this.globalObjectInstance.current_port_instance = port_instance as PortInstance;
+
+    //check if it is a relationclassinstance
+    if (this.globalObjectInstance.current_class_instance == undefined) {
+      //set relationclass to current current_class_instance
+      const sceneInstance = (await this.instanceUtility.getTabContextSceneInstance())!;
+      this.globalObjectInstance.current_class_instance = sceneInstance.relationclasses_instances.find((relationclassInstance) => relationclassInstance.uuid == instance_uuid) as ClassInstance;
+
+      if (this.globalObjectInstance.current_class_instance) {
+        this.logger.log("clicked on relationclass_instance", "info");
+        this.globalStateObject.activeStateLine = object as unknown as Line2;
+      }
+    }
+
+    // Drive the reactive selection store (engine -> store) alongside the bus.
+    let selType: SelectionType = null;
+    if (class_instance) selType = "class";
+    else if (this.globalObjectInstance.current_class_instance) selType = "relationclass";
+    else if (port_instance) selType = "port";
+    useSelectionStore.getState().setSelection(instance_uuid, selType);
+
+    this.eventAggregator.publish("removeAttributeGui");
+    // add eventAggregator for attribute gui -> set small timeout to wait for the removeAttributeGui event which updates also the texts
+    setTimeout(() => {
+      this.eventAggregator.publish("updateAttributeGui");
+    }, 10);
+  }
+
+  /**
+   * Select a scene object by its instance UUID, as if the user had clicked it on the
+   * canvas — used by the model-tree panel to drive selection from a list. Puts the
+   * canvas in SelectionMode first (entering a mode clears the current selection, so it
+   * has to happen before the new object is set), then runs the same `selectObject`
+   * routine a canvas pick does, and optionally pans the camera to the object.
+   *
+   * A no-op (logged) when nothing in the active tab is drawn for that UUID.
+   */
+  async selectInstanceByUuid(uuid: string, opts?: { focusCamera?: boolean }): Promise<void> {
+    const object = this.globalObjectInstance.dragObjects.find((candidate) => candidate.uuid === uuid);
+    if (!object) {
+      this.logger.log(`selectInstanceByUuid: no drawn object for instance ${uuid}`, "info");
+      return;
+    }
+
+    if (this.globalStateObject.getState() !== this.globalStateObject.stateNames[0]) {
+      this.globalStateObject.setState(0);
+    }
+    this.clickedButton = 0;
+    this.globalObjectInstance.transformControls.setMode("translate");
+
+    await this.selectObject(object);
+
+    if (opts?.focusCamera) this.focusCameraOnObject(object);
+
+    this.globalObjectInstance.render = true;
+  }
+
+  /**
+   * Pan the active camera so `object` sits at the centre of the view. Pan only — the
+   * zoom / distance is left untouched. Works for both the 2D orthographic and the 3D
+   * perspective camera because it only shifts the camera and the orbit target by the
+   * same vector. Uses the object's world bounding-box centre so it also works for
+   * relation `Line2`s, whose own `position` stays at the origin.
+   */
+  private focusCameraOnObject(object: THREE.Object3D): void {
+    const center = new THREE.Box3().setFromObject(object).getCenter(new THREE.Vector3());
+    if (!Number.isFinite(center.x) || !Number.isFinite(center.y) || !Number.isFinite(center.z)) return;
+
+    const controls = this.globalObjectInstance.orbitControls;
+    const camera = this.globalObjectInstance.camera;
+    const offset = camera.position.clone().sub(controls.target);
+    controls.target.copy(center);
+    camera.position.copy(center).add(offset);
+    controls.update();
   }
 
   /**

@@ -470,6 +470,32 @@ describe("AttributeWindow", () => {
     expect(payload?.currentClassInstance).toBe(classInstance);
   });
 
+  // --- the Position tab -------------------------------------------------------------
+
+  it("edits the selected object's position through the Position tab", async () => {
+    selectClassInstanceWith([attributeInstanceJson()]);
+    const mesh = { uuid: CLASS_INSTANCE_UUID, position: { x: 1, y: 2, z: 0 } };
+    mocks.globalSelectedObject.getObject.mockReturnValue(mesh);
+    const recorded: unknown[] = [];
+    const sub = eventBus.subscribe("historyRecord", (p) => recorded.push(p));
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+    fireEvent.click(await screen.findByRole("tab", { name: "Position" }));
+
+    const xField = await screen.findByLabelText("X");
+    expect((xField as HTMLInputElement).value).toBe("1");
+
+    fireEvent.change(xField, { target: { value: "5.5" } });
+    fireEvent.blur(xField);
+    sub.dispose();
+
+    expect(mesh.position.x).toBe(5.5);
+    expect(mocks.globalObject.render).toBe(true);
+    expect(recorded).toHaveLength(1);
+    expect((recorded[0] as { afterTransformSync?: boolean }).afterTransformSync).toBe(true);
+  });
+
   it("shows the GLTF upload button for the Object 3D attribute and opens its dialog", async () => {
     selectClassInstanceWith([
       attributeInstanceJson({

@@ -72,7 +72,23 @@ describe("RayHelper.shootRayFromObject", () => {
     expect(point!.x).toBeCloseTo(14.5, 3);
   });
 
-  it("falls back to the geometry centre rather than undefined when nothing is hit", () => {
+  it("meets the silhouette, not the centre, of a BACK-SIDE-only vizRep (hollow shell)", () => {
+    // graphic_sphere with material.side = THREE.BackSide: the raycaster skips the near
+    // wall, so the endpoint used to fall through to the far wall / object centre.
+    const shell = new THREE.Mesh(new THREE.SphereGeometry(0.6, 16, 16), new THREE.MeshBasicMaterial());
+    shell.material.side = THREE.BackSide;
+    shell.position.set(10, 0, 0);
+    shell.updateMatrixWorld(true);
+
+    const point = rayHelper.shootRayFromObject(cubeAt(0, 0, 0), shell);
+    expect(point).toBeDefined();
+    // Near rim of a r=0.6 sphere centred at x=10, i.e. x≈9.4 — not x≈10 (centre).
+    expect(point!.x).toBeCloseTo(9.4, 1);
+    // material.side is left as the caller set it.
+    expect(shell.material.side).toBe(THREE.BackSide);
+  });
+
+  it("falls back to the silhouette point rather than undefined when nothing is hit", () => {
     const empty = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial());
     empty.position.set(4, 2, 0);
     empty.updateMatrixWorld(true);

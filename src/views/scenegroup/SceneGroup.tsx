@@ -360,6 +360,11 @@ export default function SceneGroup() {
       // Run the hybrid algorithms for the freshly loaded scene — for a Statechange
       // scene this is what makes its Reference instances adopt their targets' meshes.
       await hybridAlgorithmsService.checkHybridAlgorithms(null, sceneInstance.class_instances);
+
+      // The scene's instances are now imported and drawn — tell the model-tree panel to
+      // build its list. `tabChanged` (published back in createTabContextSceneInstance)
+      // fires too early, before loadPersistedModel has populated class_instances.
+      eventBus.publish("sceneInstanceMutated", { sceneInstanceUuid: sceneInstance.uuid });
     }
   }
 

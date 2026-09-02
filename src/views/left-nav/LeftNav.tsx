@@ -1,26 +1,51 @@
-import { Box, Divider } from "@mui/material";
+import { useState } from "react";
+import { Box, Divider, Tab, Tabs } from "@mui/material";
 import { useTabsStore } from "@/resources/store/tabsStore";
 import SceneGroup from "@/views/scenegroup/SceneGroup";
+import ModelTree from "@/views/model-tree/ModelTree";
 import ClassButtonGroup from "@/views/palette/ClassButtonGroup";
 import RelationclassButtonGroup from "@/views/palette/RelationclassButtonGroup";
 
-// Left column: the scene tree, plus the class and relation-class palettes — the two
-// palettes only once a tab is open, which is derived reactively from `tabsStore`.
+// Left column: a tab strip over two views.
+//  - "Scenes": the scene tree (SceneTypes / SceneInstances) plus the class and
+//    relation-class palettes — the palettes only once a scene tab is open.
+//  - "Model tree": a treeview of the objects in the open scene instance, grouped by
+//    metaclass; clicking a row selects that object on the canvas.
+//
+// Both panels stay mounted (the inactive one hidden) so SceneGroup's init effect and
+// bus subscriptions are not torn down every time the user switches tabs.
 export default function LeftNav() {
   const openTab = useTabsStore((s) => s.selectedTab >= 0 && s.tabs.length > 0);
+  const [active, setActive] = useState<"scenes" | "modelTree">("scenes");
 
   return (
-    <Box sx={{ height: "100%", overflowY: "auto", p: 1 }}>
-      <SceneGroup />
+    <Box sx={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <Tabs
+        value={active}
+        onChange={(_, value) => setActive(value)}
+        variant="fullWidth"
+        sx={{ minHeight: 36, flex: "0 0 auto", borderBottom: "1px solid", borderColor: "divider" }}
+      >
+        <Tab value="scenes" label="Scenes" sx={{ minHeight: 36, fontSize: "9pt" }} />
+        <Tab value="modelTree" label="Model tree" sx={{ minHeight: 36, fontSize: "9pt" }} />
+      </Tabs>
 
-      {openTab && (
-        <>
-          <Divider sx={{ my: 1 }} />
-          <ClassButtonGroup />
-          <Divider sx={{ my: 1 }} />
-          <RelationclassButtonGroup />
-        </>
-      )}
+      <Box sx={{ flex: 1, overflowY: "auto", p: 1, minHeight: 0 }} hidden={active !== "scenes"}>
+        <SceneGroup />
+
+        {openTab && (
+          <>
+            <Divider sx={{ my: 1 }} />
+            <ClassButtonGroup />
+            <Divider sx={{ my: 1 }} />
+            <RelationclassButtonGroup />
+          </>
+        )}
+      </Box>
+
+      <Box sx={{ flex: 1, overflowY: "auto", minHeight: 0 }} hidden={active !== "modelTree"}>
+        <ModelTree />
+      </Box>
     </Box>
   );
 }
