@@ -8,9 +8,20 @@ import { ClassInstance } from "@gds/models/instance/Instance_classes.structure";
 import { RelationclassInstance } from "@gds/models/instance/Instance_relationclasses.structure";
 import { apiFetch, ApiError, responseErrorMessage } from "./api";
 import { getToken } from "./token";
+import { omitEngineOnly } from "./scene-diff";
 import { useLogStore } from "@/resources/store/logStore";
 
 const log = (value: string, status: string) => useLogStore.getState().log(value, status);
+
+/**
+ * A scene instance as the server should see it: everything the engine hangs off the
+ * instances for its own use (a URDF mesh, above all) is left behind. Those properties
+ * are not gds fields, so the server would drop them anyway — but only after they had
+ * been serialized into the request, which for a robot means megabytes of mesh per link.
+ */
+function serializeSceneBody(body: SceneInstance): string {
+  return JSON.stringify(body, omitEngineOnly);
+}
 
 /** Shape returned by GET /instances/sceneInstances/:uuid/access. */
 export interface AccessEntry {
@@ -173,7 +184,7 @@ export class BackendService {
     try {
       const response = await apiFetch(
         `instances/sceneTypes/${encodeURIComponent(sceneTypeUUID)}/sceneInstances`,
-        { method: "POST", headers: authHeaders(), body: JSON.stringify(body) },
+        { method: "POST", headers: authHeaders(), body: serializeSceneBody(body) },
       );
       if (!response.ok) throw new Error(`Failed to create scene instance (${response.status})`);
       return SceneInstance.fromJS(await response.json()) as SceneInstance;
@@ -200,7 +211,7 @@ export class BackendService {
   ): Promise<SceneInstance> {
     const response = await apiFetch(
       `instances/sceneInstances/${encodeURIComponent(sceneInstanceUUID)}`,
-      { method: "PATCH", headers: authHeaders(), body: JSON.stringify(body) },
+      { method: "PATCH", headers: authHeaders(), body: serializeSceneBody(body) },
     );
     if (!response.ok) {
       // The server's own message is carried along: persistSceneInstanceToDB needs it to

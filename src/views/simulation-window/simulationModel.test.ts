@@ -27,10 +27,12 @@ const mocks = vi.hoisted(() => ({
     tryGetRobotJointValue: vi.fn((_i: ClassInstance): number | undefined => undefined),
     tryUpdateRobotFromJointValue: vi.fn(async () => true),
   },
+  urdfPersistence: { recordJointValue: vi.fn() },
 }));
 vi.mock("@/resources/services/meta-utility", () => ({ metaUtility: mocks.metaUtility }));
 vi.mock("@/resources/services/instance-utility", () => ({ instanceUtility: mocks.instanceUtility }));
 vi.mock("@/engine/hybrid-algorithms/urdf-pose-service", () => ({ urdfPoseService: mocks.urdfPoseService }));
+vi.mock("@/engine/hybrid-algorithms/urdf-persistence", () => mocks.urdfPersistence);
 
 const { buildSimulationState, applyJointValue, clamp, toNumber } = await import(
   "@/views/simulation-window/simulationModel"
@@ -236,6 +238,21 @@ describe("simulationModel", () => {
 
       expect(await applyJointValue(control, "0.25")).toBe(0.25);
       expect(mocks.urdfPoseService.tryUpdateRobotFromJointValue).toHaveBeenLastCalledWith(control.instance, 0.25);
+    });
+
+    // The value lives on the parsed URDF robot, which a reload rebuilds from the stored
+    // URDF at its REST pose. Recording it is what brings the joints back where the user
+    // left them instead of at zero.
+    it("records the applied value for the save, and records nothing when it was refused", async () => {
+      const control = ctrl();
+
+      await applyJointValue(control, 0.5);
+      expect(mocks.urdfPersistence.recordJointValue).toHaveBeenLastCalledWith(control.instance, 0.5);
+
+      mocks.urdfPersistence.recordJointValue.mockClear();
+      mocks.urdfPoseService.tryUpdateRobotFromJointValue.mockResolvedValueOnce(false);
+      await applyJointValue(control, 0.75);
+      expect(mocks.urdfPersistence.recordJointValue).not.toHaveBeenCalled();
     });
   });
 });

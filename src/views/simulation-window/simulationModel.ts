@@ -2,6 +2,7 @@ import { AttributeInstance, ClassInstance } from "@gds";
 import { metaUtility } from "@/resources/services/meta-utility";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { urdfPoseService } from "@/engine/hybrid-algorithms/urdf-pose-service";
+import { recordJointValue } from "@/engine/hybrid-algorithms/urdf-persistence";
 import { ROBOTIC_SYSTEM_SCENETYPE_UUID, META_JOINT_UUID } from "@/constants";
 
 /**
@@ -129,7 +130,13 @@ export async function applyJointValue(ctrl: JointControl, rawValue: unknown): Pr
   // Clamp to guard against UI edge cases.
   const clamped = clamp(value, ctrl.lower, ctrl.upper);
 
-  await urdfPoseService.tryUpdateRobotFromJointValue(ctrl.instance, clamped);
+  const applied = await urdfPoseService.tryUpdateRobotFromJointValue(ctrl.instance, clamped);
+
+  // Keep the value that was actually applied, so a reopened scene comes back with its
+  // joints where the user left them rather than at the URDF's rest pose. Recorded here
+  // rather than in the pose service: this is where a value the USER chose enters, and
+  // the poses the robot derives from it are saved by the same autosave.
+  if (applied) recordJointValue(ctrl.instance, clamped);
 
   return clamped;
 }

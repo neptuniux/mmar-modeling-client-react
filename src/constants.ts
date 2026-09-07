@@ -64,6 +64,28 @@ export const META_JOINT_UUID = "c5cf9a3c-988a-4fd4-87e5-0ad8fcc7234b";
 /** Class "Reference" of the Statechange metamodel. */
 export const REFERENCE_CLASS_UUID = "ada138a9-646c-4df4-8622-fb79092a9ad0";
 
+/* ------------------------------------------------------------------------- *
+ * BPMN — a Pool that shows the robot it references.
+ * ------------------------------------------------------------------------- */
+
+/** SceneType "Business Process Model and Notation". */
+export const BPMN_SCENETYPE_UUID = "5e37e51c-e420-438c-9747-e9424723b4cd";
+
+/** Class "Pool" of the BPMN metamodel. */
+export const POOL_CLASS_UUID = "f17b9921-8bcb-4d4f-bcbf-db035a47fb3c";
+
+/**
+ * Attribute "Show referenced URDF system" on the BPMN Pool: while it holds "true", the
+ * robot of the Robotic system scene the Pool references is drawn inside the Pool.
+ *
+ * Matched by uuid OR by name (case-insensitively): the uuid is the contract with the
+ * database like every other constant here, and the name keeps the feature working for a
+ * Pool whose attribute was re-created — a re-created attribute keeps its name and loses
+ * its uuid, and a silently blank Pool is a poor way to learn that.
+ */
+export const SHOW_REFERENCED_URDF_ATTRIBUTE_UUID = "ec657492-ec07-4640-979e-acd7607419e9";
+export const SHOW_REFERENCED_URDF_ATTRIBUTE_NAME = "Show referenced URDF system";
+
 /** Attribute "Augmentation_Reference" on the Statechange Reference class. */
 export const AUGMENTATION_REFERENCE_ATTRIBUTE_UUID = "b8d05324-ed3b-4c10-885a-164ec15a0f36";
 

@@ -78,7 +78,14 @@ export const SCENE_FIELDS_KEY = "__scene__";
  */
 const ENGINE_ONLY_KEYS = new Set(["urdfVizRep"]);
 
-const omitEngineOnly = (key: string, value: unknown) => (ENGINE_ONLY_KEYS.has(key) ? undefined : value);
+/**
+ * `JSON.stringify` replacer that drops them. Exported because the scene PATCH needs it
+ * as much as a snapshot does: sending `urdfVizRep` uploaded a whole glTF document per
+ * link (and `{}` for a binary mesh), which is both useless to the server and enough to
+ * push a robot of any size past the request body limit — the save then failed outright.
+ */
+export const omitEngineOnly = (key: string, value: unknown) =>
+  ENGINE_ONLY_KEYS.has(key) ? undefined : value;
 
 /** Deep clone a SceneInstance (or a snapshot) into plain JSON. */
 export function cloneScene(scene: SceneInstance | SceneSnapshot): SceneSnapshot {

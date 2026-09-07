@@ -60,6 +60,9 @@ const mocks = vi.hoisted(() => {
     },
     instanceUtility: {
       getAttributeInstanceFromClassInstance: vi.fn(async (): Promise<unknown> => undefined),
+      // The open scene is what the imported URDF is remembered against, for the next
+      // save to upload; a tab with no scene simply skips that.
+      getTabContextSceneInstance: vi.fn(async (): Promise<unknown> => ({ uuid: "scene-instance-uuid" })),
     },
     logger: { log: vi.fn() },
   };

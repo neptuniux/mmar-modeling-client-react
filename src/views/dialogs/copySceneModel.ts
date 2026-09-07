@@ -1,6 +1,7 @@
 import { v4 as uuidv4 } from "uuid";
 import { SceneInstance } from "@gds";
 import type { AttributeInstance } from "@gds";
+import { omitEngineOnly } from "@/resources/services/scene-diff";
 
 /**
  * The uuid-rewriting deep copy behind the "Duplicate SceneInstance" dialog, kept apart
@@ -96,7 +97,11 @@ export function duplicateSceneInstance(
   name: string,
   description: string,
 ): SceneInstance {
-  let sceneInstanceAsString = JSON.stringify(sceneInstance);
+  // Engine-only properties are dropped here rather than copied: a URDF mesh is either a
+  // whole glTF document (which this would then run a uuid regex over) or an ArrayBuffer
+  // that serializes to `{}` — a mesh-shaped value with no mesh in it. The copy keeps the
+  // FILE REFERENCE in `custom_variables` instead, which is what it draws from.
+  let sceneInstanceAsString = JSON.stringify(sceneInstance, omitEngineOnly);
 
   for (const oldUuid of collectSceneInstanceUuids(sceneInstance)) {
     sceneInstanceAsString = sceneInstanceAsString.replace(

@@ -29,6 +29,11 @@ const mocks = vi.hoisted(() => ({
   instanceCreationHandler: {
     createMissingSceneAttributeInstances: vi.fn(async () => []),
   } as any,
+  urdfPersistence: {
+    persistSceneAssets: vi.fn(async () => undefined),
+    restoreRobots: vi.fn(async () => undefined),
+    hydrateMesh: vi.fn(async () => undefined),
+  } as any,
 }));
 
 vi.mock("@/engine/global-definition", () => ({ globalObject: mocks.globalObject }));
@@ -44,6 +49,7 @@ vi.mock("./meta-utility", () => ({ metaUtility: mocks.metaUtility }));
 vi.mock("./instance-utility", () => ({ instanceUtility: mocks.instanceUtility }));
 vi.mock("./snapshot-service", () => ({ snapshotService: mocks.snapshotService }));
 vi.mock("./backend-service", () => ({ backendService: mocks.backendService }));
+vi.mock("@/engine/hybrid-algorithms/urdf-persistence", () => mocks.urdfPersistence);
 
 import { persistencyHandler } from "./persistency-handler";
 import { useLogStore } from "@/resources/store/logStore";
@@ -145,6 +151,35 @@ describe("persistency-handler.persistSceneInstanceToDB", () => {
     expect(useLogStore.getState().logArray.some((entry) => entry.value.includes("does not match the regex"))).toBe(true);
   });
 
+  // An imported robot's meshes and URDF live outside the scene payload, in the file
+  // store, and the uuids that point at them are written onto the scene here. Uploading
+  // AFTER the PATCH would save a scene that references files it does not have yet.
+  it("stores the robot's files before the scene that references them", async () => {
+    const scene = makeScene("s-robot", "Robot Scene");
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(scene);
+    mocks.metaUtility.getTabContextSceneType.mockResolvedValue({ uuid: "st-1" });
+    mocks.backendService.sceneInstancesPATCH.mockResolvedValue(scene);
+
+    await persistencyHandler.persistSceneInstanceToDB();
+
+    expect(mocks.urdfPersistence.persistSceneAssets).toHaveBeenCalledWith(scene);
+    expect(mocks.urdfPersistence.persistSceneAssets.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.backendService.sceneInstancesPATCH.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("still saves the scene when the robot's files cannot be stored", async () => {
+    const scene = makeScene("s-robot", "Robot Scene");
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(scene);
+    mocks.metaUtility.getTabContextSceneType.mockResolvedValue({ uuid: "st-1" });
+    mocks.backendService.sceneInstancesPATCH.mockResolvedValue(scene);
+    mocks.urdfPersistence.persistSceneAssets.mockRejectedValueOnce(new Error("file store down"));
+
+    await persistencyHandler.persistSceneInstanceToDB();
+
+    expect(mocks.backendService.sceneInstancesPATCH).toHaveBeenCalledWith("s-robot", scene);
+  });
+
   it("logs and skips when there is no active scene instance", async () => {
     mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(undefined);
 
@@ -166,6 +201,26 @@ describe("persistency-handler.loadPersistedModel", () => {
     await persistencyHandler.loadPersistedModel(scene);
 
     expect(mocks.instanceCreationHandler.createMissingSceneAttributeInstances).toHaveBeenCalledWith(scene);
+  });
+
+  // Without this a reopened robotic scene draws its robot but cannot move it: the pose
+  // service and the simulation sliders both need a parsed URDF behind the instances.
+  it("re-registers the robots a saved robotic scene points at", async () => {
+    const scene = makeScene("s-robot", "Robot Scene");
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(scene);
+
+    await persistencyHandler.loadPersistedModel(scene);
+
+    expect(mocks.urdfPersistence.restoreRobots).toHaveBeenCalledWith(scene);
+  });
+
+  it("still loads the scene when a robot cannot be restored", async () => {
+    const scene = makeScene("s-robot", "Robot Scene");
+    mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue(scene);
+    mocks.urdfPersistence.restoreRobots.mockRejectedValueOnce(new Error("urdf gone"));
+
+    await expect(persistencyHandler.loadPersistedModel(scene)).resolves.toBeUndefined();
+    expect(mocks.instanceCreationHandler.createMissingSceneAttributeInstances).toHaveBeenCalled();
   });
 
   it("still loads the scene when the attribute instantiation fails", async () => {

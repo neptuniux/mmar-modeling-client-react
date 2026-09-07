@@ -1,5 +1,6 @@
 import { Attribute, AttributeInstance, Class, ClassInstance, PortInstance } from "@gds";
 import { globalObject } from "@/engine/global-definition";
+import { bpmnAlgorithms } from "@/engine/hybrid-algorithms/bpmn-algorithms";
 import { objectspaceAlgorithms } from "@/engine/hybrid-algorithms/objectspace-algorithms";
 import { statechangeAlgorithms } from "@/engine/hybrid-algorithms/statechange-algorithms";
 import { urdfPoseService, type UrdfTaggedClassInstance } from "@/engine/hybrid-algorithms/urdf-pose-service";
@@ -7,6 +8,7 @@ import { instanceUtility } from "@/resources/services/instance-utility";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 import {
+  BPMN_SCENETYPE_UUID,
   ROBOTIC_SYSTEM_SCENETYPE_UUID,
   OBJECTSPACE_SCENETYPE_UUID,
   STATECHANGE_SCENETYPE_UUID,
@@ -33,6 +35,7 @@ import {
 export class HybridAlgorithmsService {
   private globalObjectInstance = globalObject;
   private instanceUtility = instanceUtility;
+  private bpmnAlgorithms = bpmnAlgorithms;
   private objectspaceAlgorithms = objectspaceAlgorithms;
   private statechangeAlgorithms = statechangeAlgorithms;
   private urdfPoseService = urdfPoseService;
@@ -48,6 +51,15 @@ export class HybridAlgorithmsService {
     // check if any open tabs
     if (this.globalObjectInstance.tabContext.length > 0) {
       const sceneInstance = await this.instanceUtility.getTabContextSceneInstance();
+
+      // A BPMN Pool can show the robot of the Robotic system scene it references. Like
+      // the robotic branch below this returns: no other pass applies to a BPMN scene.
+      if (sceneInstance && sceneInstance.uuid_scene_type == BPMN_SCENETYPE_UUID) {
+        await this.bpmnAlgorithms
+          .checkPoolRobots(sceneInstance)
+          .catch((err) => this.logger?.log(`Pool robot update failed: ${describeError(err)}`, "error"));
+        return;
+      }
 
       if (sceneInstance && sceneInstance.uuid_scene_type == ROBOTIC_SYSTEM_SCENETYPE_UUID) {
         // A robotic scene returns unconditionally, whether or not the pass below threw:
@@ -182,6 +194,15 @@ export class HybridAlgorithmsService {
       if (sceneInstance?.uuid_scene_type == STATECHANGE_SCENETYPE_UUID) {
         //update the reference class attribute instance values
         await this.statechangeAlgorithms.updateReferenceClassAttributeInstanceValues();
+      }
+
+      // A BPMN Pool's robot hangs off the Pool's three.js object, so it is lost whenever
+      // that object is replaced — which a vizRep re-run does, fire-and-forget, possibly
+      // after the edit's own hybrid pass has already run. Reconciling here also picks up
+      // a flag a COLLABORATOR toggled. A Pool that is already correct costs one attribute
+      // read; nothing is rebuilt or re-fetched.
+      if (sceneInstance?.uuid_scene_type == BPMN_SCENETYPE_UUID) {
+        await this.bpmnAlgorithms.checkPoolRobots(sceneInstance);
       }
     }
   }

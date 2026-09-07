@@ -4,6 +4,7 @@ import { Attribute, ClassInstance, RoleInstance, PortInstance, UUID } from "@gds
 import { instanceCreationHandler } from "@/engine/instance-creation-handler";
 import { urdfPoseService, type UrdfTaggedClassInstance } from "@/engine/hybrid-algorithms/urdf-pose-service";
 import { hybridAlgorithmsService } from "@/engine/hybrid-algorithms/hybrid-algorithms-service";
+import { rememberUrdfSource, tagInstance, type UrdfVizRep } from "@/engine/hybrid-algorithms/urdf-persistence";
 import { metaUtility } from "@/resources/services/meta-utility";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { persistencyHandler } from "@/resources/services/persistency-handler";
@@ -38,12 +39,12 @@ export type ZipIndex = {
   entries: Array<{ path: string; pathLower: string; baseNameLower: string; entry: ZipEntry }>;
 };
 
-/** The mesh payload stamped onto a link instance for the GraphicContext to draw. */
-export type UrdfVizRep = {
-  format: "gltf" | "glb" | "stl";
-  data: string | ArrayBuffer;
-  scale: number[];
-};
+/**
+ * The mesh payload stamped onto a link instance for the GraphicContext to draw. Owned
+ * by `urdf-persistence`, which is what turns one into a stored file and back; re-exported
+ * here because this is where the type has always been imported from.
+ */
+export type { UrdfVizRep } from "@/engine/hybrid-algorithms/urdf-persistence";
 
 /** A row of table-cell values; a nested object means a nested table (e.g. Origin in Visual). */
 type RowData = Record<string, string | Record<string, string>>;
@@ -165,6 +166,9 @@ export class RoboticsystemAlgorithms {
           const tagged = classInstance as UrdfTaggedClassInstance;
           tagged.urdfRobotKey = robotKey;
           tagged.urdfRef = { kind: "link", name: linkName };
+          // The same linkage in `custom_variables`, which is the half of it that a save
+          // keeps: the tags above are not gds fields, so the server drops them.
+          tagInstance(classInstance, { robotKey, kind: "link", name: linkName });
 
           linkMap.set(linkName, classInstance);
           createdLinkInstances.push(classInstance);
@@ -249,6 +253,7 @@ export class RoboticsystemAlgorithms {
           const tagged = classInstance as UrdfTaggedClassInstance;
           tagged.urdfRobotKey = robotKey;
           tagged.urdfRef = { kind: "joint", name: jointName };
+          tagInstance(classInstance, { robotKey, kind: "joint", name: jointName });
 
           createdJointInstances.push(classInstance);
 
@@ -317,6 +322,12 @@ export class RoboticsystemAlgorithms {
 
       // Draw newly created instances if not yet in scene
       await this.persistencyHandler.checkIfClassinstanceInScene();
+
+      // Hand the URDF itself to the persistence layer, which uploads it on the next save
+      // so a reopened scene can re-parse the robot rather than lose it. Held against the
+      // scene rather than written into it: the XML has no business in a scene payload.
+      const sceneInstance = await this.instanceUtility.getTabContextSceneInstance();
+      if (sceneInstance) rememberUrdfSource(sceneInstance.uuid, robotKey, xmlText);
     } catch (err) {
       this.logger?.log(`URDF processing error: ${describeError(err)}`, "error");
       console.error(err);

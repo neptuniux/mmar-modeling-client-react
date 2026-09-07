@@ -34,10 +34,12 @@ type RobotRecord = {
 
 /**
  * The URDF linkage metadata `roboticsystem-algorithms` stamps onto each created
- * ClassInstance. These are NOT gds fields — they are transient, in-memory only, and do
- * not survive a save/reload round-trip (the server drops unknown properties). The old
- * client did the same with `(classInstance as any).urdfRobotKey`; this type just names
- * the shape so both files agree on it.
+ * ClassInstance. These are NOT gds fields — they are in-memory only, and the server
+ * drops them like any unknown property. What survives a save is the copy the import
+ * also writes into `custom_variables` (`urdf-persistence`), which `restoreRobots` reads
+ * back to re-stamp these tags when a saved scene is reopened. The old client did the
+ * same with `(classInstance as any).urdfRobotKey`; this type just names the shape so
+ * both files agree on it.
  */
 export type UrdfTaggedClassInstance = ClassInstance & {
   urdfRobotKey?: string;
@@ -97,6 +99,8 @@ export class UrdfPoseService {
       linkInstances: linkMap,
       jointInstances: jointMap,
     });
+    // This key has a robot again, so a later loss of one is worth reporting afresh.
+    this.warnedRobotKeys.delete(robotKey);
 
     this.logger?.log(
       `Registered URDF robot '${robotKey}' (links=${linkMap.size}, joints=${jointMap.size})`,
@@ -173,7 +177,10 @@ export class UrdfPoseService {
     if (!jointInstance || !Number.isFinite(jointValue)) return false;
 
     const record = this.getRecordForInstance(jointInstance);
-    if (!record?.robot) return false;
+    if (!record?.robot) {
+      this.warnNoRobot(jointInstance);
+      return false;
+    }
 
     const urdfJointName = this.getUrdfNameFromInstance(jointInstance);
     if (!urdfJointName) return false;
@@ -259,6 +266,26 @@ export class UrdfPoseService {
 
     const n = this.toNumber(raw);
     return Number.isFinite(n) ? n : undefined;
+  }
+
+  /** Robot keys already reported as missing, so a dragged slider reports once. */
+  private warnedRobotKeys = new Set<string>();
+
+  /**
+   * Say why a slider does nothing. A joint with no robot behind it is the normal state
+   * of a scene whose URDF was never stored — a robot imported before the scene carried
+   * its URDF, or one whose upload failed — and silence there reads as a broken
+   * simulation rather than as something a re-import fixes.
+   */
+  private warnNoRobot(jointInstance: ClassInstance): void {
+    const robotKey = this.getRobotKey(jointInstance);
+    if (this.warnedRobotKeys.has(robotKey)) return;
+    this.warnedRobotKeys.add(robotKey);
+    this.logger?.log(
+      `No URDF is loaded for '${robotKey}', so its joints cannot be moved. ` +
+        `Import the robot's .zip into this scene again (File > Map file to SceneInstance) and save.`,
+      "error",
+    );
   }
 
   private getRobotKey(instance: ClassInstance): string {

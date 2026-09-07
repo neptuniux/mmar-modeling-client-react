@@ -4,10 +4,12 @@ import { globalObject } from "@/engine/global-definition";
 import { globalStateObject } from "@/engine/global-state-object";
 import { GraphicContext, graphicContext } from "@/engine/graphic-context";
 import { instanceCreationHandler } from "@/engine/instance-creation-handler";
+import { hydrateMesh, persistSceneAssets, restoreRobots } from "@/engine/hybrid-algorithms/urdf-persistence";
 import { describeError } from "@/resources/util/describe-error";
 import { metaUtility } from "./meta-utility";
 import { instanceUtility } from "./instance-utility";
 import { snapshotService } from "./snapshot-service";
+import { omitEngineOnly, serializeScene } from "./scene-diff";
 import { backendService } from "./backend-service";
 import { eventBus } from "./event-bus";
 import { logger } from "./logger";
@@ -106,10 +108,10 @@ export class PersistencyHandler {
         let classObject3D: THREE.Mesh | undefined;
 
         // Prefer a URDF-provided mesh where the robotics algorithms left one, and fall
-        // back to the metamodel's vizRep otherwise.
-        const customVizRep = (class_instance as any).urdfVizRep as
-          | { format: string; data: string | ArrayBuffer; scale?: number[] }
-          | undefined;
+        // back to the metamodel's vizRep otherwise. A scene loaded from the database has
+        // no mesh in memory, only the file reference a save left in `custom_variables`,
+        // so hydrating comes first — that is what makes a SAVED robot draw as a robot.
+        const customVizRep = await hydrateMesh(class_instance);
 
         if (customVizRep) {
           await this.gc.resetInstance();
@@ -346,6 +348,14 @@ export class PersistencyHandler {
     const sceneType = await this.metaUtility.getTabContextSceneType();
     if (!sceneType) return;
 
+    // An imported robot's meshes and URDF go to the file store first, leaving only their
+    // uuids in the scene's `custom_variables` for the PATCH below to carry. Without this
+    // the robot is simply not part of what gets saved: neither the mesh nor the URDF
+    // linkage is a gds field, so the server drops both.
+    await persistSceneAssets(sceneInstance).catch((error) =>
+      this.logger.log(`Storing the robot's files failed: ${describeError(error)}`, "error"),
+    );
+
     // A single PATCH both creates the scene on its first save and updates it on every
     // save after that: the server PATCH is an upsert, so there is no POST-on-404
     // fallback anymore (which is what produced the misleading 404 on scene creation).
@@ -381,6 +391,14 @@ export class PersistencyHandler {
 
   async loadPersistedModel(modelToLoad: SceneInstance) {
     await this.importInstances();
+
+    // Re-parse the URDF a saved robotic scene points at, so joint Origin edits and the
+    // simulation sliders have a robot to move again. Drawing does not depend on it — the
+    // meshes come from the per-instance file references — so a robot that fails to
+    // restore costs behaviour, not the scene.
+    await restoreRobots(modelToLoad).catch((error) =>
+      this.logger.log(`Restoring the scene's robots failed: ${describeError(error)}`, "error"),
+    );
 
     // A scene saved before scene-type attributes were instantiated carries none, so the
     // attribute window would show an empty section for it. Adding the missing ones on
@@ -430,7 +448,10 @@ export class PersistencyHandler {
     this.logger.log("save", "info");
     if (this.globalObjectInstance.tabContext.length > 0) {
       const sceneInstance = await this.instanceUtility.getTabContextSceneInstance();
-      const blob = new Blob([JSON.stringify(sceneInstance)], {
+      // Engine-only properties are left out here for the same reason the PATCH leaves
+      // them out: a URDF mesh is either a whole glTF document or an ArrayBuffer that
+      // serializes to `{}`. The exported scene keeps the file references instead.
+      const blob = new Blob([serializeScene(sceneInstance!)], {
         type: "text/plain;charset=utf-8",
       });
       const url = window.URL.createObjectURL(blob);
@@ -447,7 +468,7 @@ export class PersistencyHandler {
       for (const sceneInstance of sceneInstances) {
         json[sceneInstance.uuid] = sceneInstance;
       }
-      const blob = new Blob([JSON.stringify(json)], { type: "json/plain;charset=utf-8" });
+      const blob = new Blob([JSON.stringify(json, omitEngineOnly)], { type: "json/plain;charset=utf-8" });
       const url = window.URL.createObjectURL(blob);
 
       this.downloadURL(url, "allOpenModels.json");
