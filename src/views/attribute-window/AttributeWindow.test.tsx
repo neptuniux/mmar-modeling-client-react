@@ -10,6 +10,7 @@
 // eventBus are the real singletons.
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import * as THREE from "three";
 import { AttributeInstance, ClassInstance, SceneInstance } from "@gds";
 
 const mocks = vi.hoisted(() => ({
@@ -494,6 +495,116 @@ describe("AttributeWindow", () => {
     expect(mocks.globalObject.render).toBe(true);
     expect(recorded).toHaveLength(1);
     expect((recorded[0] as { afterTransformSync?: boolean }).afterTransformSync).toBe(true);
+  });
+
+  it("edits the selected object's rotation through the Position tab", async () => {
+    selectClassInstanceWith([attributeInstanceJson()]);
+    // A quarter turn around Z, i.e. what the panel must show as a rotation of 90 degrees.
+    const quaternion = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI / 2, "XYZ"));
+    const mesh = { uuid: CLASS_INSTANCE_UUID, position: { x: 1, y: 2, z: 0 }, quaternion };
+    mocks.globalSelectedObject.getObject.mockReturnValue(mesh);
+    const recorded: unknown[] = [];
+    const sub = eventBus.subscribe("historyRecord", (p) => recorded.push(p));
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+    fireEvent.click(await screen.findByRole("tab", { name: "Position" }));
+
+    const zField = await screen.findByLabelText("Rotation Z");
+    expect((zField as HTMLInputElement).value).toBe("90");
+
+    fireEvent.change(zField, { target: { value: "-45" } });
+    fireEvent.blur(zField);
+    sub.dispose();
+
+    const euler = new THREE.Euler().setFromQuaternion(mesh.quaternion, "XYZ");
+    expect(THREE.MathUtils.radToDeg(euler.z)).toBeCloseTo(-45, 6);
+    expect((zField as HTMLInputElement).value).toBe("-45");
+    expect(recorded).toHaveLength(1);
+    expect((recorded[0] as { label?: string }).label).toBe("rotation");
+    expect((recorded[0] as { afterTransformSync?: boolean }).afterTransformSync).toBe(true);
+  });
+
+  // Scale earns its place in this tab because the client draws in metres: a concept
+  // sized for the canvas towers over the machine standing next to it.
+  it("resizes the selected object through the Position tab", async () => {
+    selectClassInstanceWith([attributeInstanceJson()]);
+    const mesh = { uuid: CLASS_INSTANCE_UUID, position: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } };
+    mocks.globalSelectedObject.getObject.mockReturnValue(mesh);
+    const recorded: unknown[] = [];
+    const sub = eventBus.subscribe("historyRecord", (p) => recorded.push(p));
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+    fireEvent.click(await screen.findByRole("tab", { name: "Position" }));
+
+    const yField = await screen.findByLabelText("Scale Y");
+    expect((yField as HTMLInputElement).value).toBe("1");
+
+    fireEvent.change(yField, { target: { value: "0.25" } });
+    fireEvent.blur(yField);
+    sub.dispose();
+
+    expect(mesh.scale).toEqual({ x: 1, y: 0.25, z: 1 });
+    expect(mocks.globalObject.render).toBe(true);
+    expect((recorded[0] as { label?: string }).label).toBe("scale");
+    expect((recorded[0] as { afterTransformSync?: boolean }).afterTransformSync).toBe(true);
+  });
+
+  // The usual want: a Task is too big as a whole, not on one axis.
+  it("resizes every axis at once through the All axes field", async () => {
+    selectClassInstanceWith([attributeInstanceJson()]);
+    const mesh = { uuid: CLASS_INSTANCE_UUID, position: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } };
+    mocks.globalSelectedObject.getObject.mockReturnValue(mesh);
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+    fireEvent.click(await screen.findByRole("tab", { name: "Position" }));
+
+    const allField = await screen.findByLabelText("All axes");
+    fireEvent.change(allField, { target: { value: "0.1" } });
+    fireEvent.blur(allField);
+
+    expect(mesh.scale).toEqual({ x: 0.1, y: 0.1, z: 0.1 });
+    expect((await screen.findByLabelText("Scale X") as HTMLInputElement).value).toBe("0.1");
+  });
+
+  // Zero collapses the geometry and a negative mirrors it; neither is a resize anyone
+  // means, and an object scaled to nothing cannot be clicked to undo it.
+  it("refuses a scale of zero or less", async () => {
+    selectClassInstanceWith([attributeInstanceJson()]);
+    const mesh = { uuid: CLASS_INSTANCE_UUID, position: { x: 0, y: 0, z: 0 }, scale: { x: 2, y: 2, z: 2 } };
+    mocks.globalSelectedObject.getObject.mockReturnValue(mesh);
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+    fireEvent.click(await screen.findByRole("tab", { name: "Position" }));
+
+    const xField = await screen.findByLabelText("Scale X");
+    fireEvent.change(xField, { target: { value: "0" } });
+    fireEvent.blur(xField);
+    expect(mesh.scale.x).toBe(2);
+
+    fireEvent.change(xField, { target: { value: "-3" } });
+    fireEvent.blur(xField);
+    expect(mesh.scale.x).toBe(2);
+    // The field shows what the object actually is, not what was typed.
+    expect((xField as HTMLInputElement).value).toBe("2");
+  });
+
+  it("falls back to the instance's stored rotation while the mesh is not reachable", async () => {
+    const classInstance = selectClassInstanceWith([attributeInstanceJson()]);
+    // Half a turn around X, stored on the instance. The selected object carries no
+    // `position`, i.e. the live mesh is not resolved yet.
+    classInstance.rotation = { x: 1, y: 0, z: 0, w: 0 };
+
+    render(<AttributeWindow />);
+    eventBus.publish("updateAttributeGui");
+    fireEvent.click(await screen.findByRole("tab", { name: "Position" }));
+
+    // Half a turn reads back as -180, the equivalent spelling three.js canonicalises to.
+    expect(((await screen.findByLabelText("Rotation X")) as HTMLInputElement).value).toBe("-180");
+    expect((screen.getByLabelText("Rotation Y") as HTMLInputElement).value).toBe("0");
   });
 
   it("shows the GLTF upload button for the Object 3D attribute and opens its dialog", async () => {

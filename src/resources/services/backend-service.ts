@@ -245,6 +245,25 @@ export class BackendService {
 
   // --- Class / relationclass / bendpoint instances --------------------------
 
+  /**
+   * GET /instances/classesInstances/:uuid -> ClassInstance.
+   *
+   * For an instance that is not in any loaded scene: a reference can point across
+   * models, and the scene tree only holds what has been expanded.
+   */
+  async classesInstancesGET(classInstanceUUID: string): Promise<ClassInstance | undefined> {
+    try {
+      const response = await apiFetch(
+        `instances/classesInstances/${encodeURIComponent(classInstanceUUID)}`,
+        { method: "GET", headers: authHeaders() },
+      );
+      if (!response.ok) throw new Error(`Failed to get class instance (${response.status})`);
+      return ClassInstance.fromJS(await response.json()) as ClassInstance;
+    } catch (error) {
+      log(`Error getting class instance: ${error}`, "error");
+    }
+  }
+
   /** DELETE /instances/classesInstances/:uuid -> ClassInstance[]. */
   async classesInstancesAllDELETE2(classInstanceUUID: string): Promise<ClassInstance[]> {
     try {

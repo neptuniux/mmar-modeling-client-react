@@ -210,6 +210,10 @@ export default function AttributeWindow() {
           instanceUuid={positionInstance.uuid}
           instanceName={positionInstance.name}
           fallbackCoordinates={positionInstance.coordinates_2d}
+          fallbackRotation={positionInstance.rotation}
+          fallbackScale={
+            (positionInstance.custom_variables as { scale?: { x: number; y: number; z: number } } | undefined)?.scale
+          }
           active={activeTab === 1}
         />
       )}

@@ -75,6 +75,15 @@ export const BPMN_SCENETYPE_UUID = "5e37e51c-e420-438c-9747-e9424723b4cd";
 export const POOL_CLASS_UUID = "f17b9921-8bcb-4d4f-bcbf-db035a47fb3c";
 
 /**
+ * Attribute "Target system entity" on the Pool: its reference to the Configuration
+ * system, which is in turn what references the Robotic system scene.
+ *
+ * The attribute used to sit on the Task and kept its uuid when it moved to the Pool, so
+ * this is the same identifier the execution procedure has always used for it.
+ */
+export const POOL_TARGET_SYSTEM_ATTRIBUTE_UUID = "9e72ed99-8f4f-41aa-aa3f-4b40b53810a7";
+
+/**
  * Attribute "Show referenced URDF system" on the BPMN Pool: while it holds "true", the
  * robot of the Robotic system scene the Pool references is drawn inside the Pool.
  *
@@ -85,6 +94,48 @@ export const POOL_CLASS_UUID = "f17b9921-8bcb-4d4f-bcbf-db035a47fb3c";
  */
 export const SHOW_REFERENCED_URDF_ATTRIBUTE_UUID = "ec657492-ec07-4640-979e-acd7607419e9";
 export const SHOW_REFERENCED_URDF_ATTRIBUTE_NAME = "Show referenced URDF system";
+
+/** Class "Task" of the BPMN metamodel. */
+export const TASK_CLASS_UUID = "cb78cd9b-7a3e-4684-9e42-33ba3d7973e2";
+
+/** RelationClass "Message Flow": what connects a Task to the Pool it acts on. */
+export const MESSAGE_FLOW_RELATIONCLASS_UUID = "8f560497-4004-4bd3-9339-df85d00d3b07";
+
+/** Attribute "Primitive configuration" on the Task — the action it performs. */
+export const TASK_PRIMITIVE_CONFIG_ATTRIBUTE_UUID = "70fbe822-7204-453b-92f4-5c99246d0396";
+
+/**
+ * Attribute "Motion effect" on the Primitive configuration: whether the action moves the
+ * arm, and in what units (`none | joint-rad | joint-deg | cartesian-m | cartesian-mm`).
+ *
+ * Read by NAME — it is a recent addition, and a metamodel that has not got it yet simply
+ * reports no motion. The match normalises case and punctuation ("Motion Effect",
+ * "motion_effect"), because the alternative is an attribute that looks right, reads as
+ * "no motion", and says nothing about why the robot never moved.
+ */
+export const MOTION_EFFECT_ATTRIBUTE_NAME = "Motion effect";
+
+/**
+ * The robot's base frame, on the Configuration system the Pool references.
+ *
+ * THE CONVENTION. This client draws in METRES — a URDF import writes URDF coordinates
+ * straight into the canvas, and ObjectSpace sizes a Detectable by its "size in meters" —
+ * so a Pool's position is a place in the cell, and these say where the robot's base sits
+ * within it: an offset in metres, and which way the arm faces. Together they are the
+ * whole mapping between the model and the real workspace, which is what makes a Task's
+ * position a coordinate a robot can be sent.
+ *
+ * Matched by NAME, loosely: "Base X", "Base X (m)" and "base_x" all count, because these
+ * are attributes you add to your own metamodel rather than rows this repository ships.
+ * A Configuration system without them places its robot at the Pool's origin, facing 0.
+ */
+export const ROBOT_BASE_ATTRIBUTE_NAMES = {
+  x: "Base X",
+  y: "Base Y",
+  z: "Base Z",
+  /** Degrees: a human declares a robot's facing in degrees, not radians. */
+  yaw: "Base yaw",
+} as const;
 
 /** Attribute "Augmentation_Reference" on the Statechange Reference class. */
 export const AUGMENTATION_REFERENCE_ATTRIBUTE_UUID = "b8d05324-ed3b-4c10-885a-164ec15a0f36";

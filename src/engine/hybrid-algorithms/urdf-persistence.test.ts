@@ -301,8 +301,35 @@ describe("urdf-persistence", () => {
       expect(readInstanceMeta(plain)).toBeUndefined();
     });
 
+    // A replaced import leaves its entry in the scene's list with no instances behind
+    // it. Registering that would put a robot with no joints where the real one belongs.
+    it("ignores a listed robot the scene has no instances for", async () => {
+      const link = makeInstance("link-1");
+      tagInstance(link, { robotKey: "link_base", kind: "link", name: "base_link" });
+      const scene = makeScene([link]);
+      (scene.custom_variables as Record<string, unknown>)["urdfRobots"] = [
+        { robotKey: "dummy_link", fileUuid: "file-stale" },
+        { robotKey: "link_base", fileUuid: "file-9" },
+      ];
+      mocks.backendService.getFileByUUID.mockResolvedValue(
+        new File([FIXTURE_URDF], "base_link.urdf", { type: "text/xml" }),
+      );
+
+      await restoreRobots(scene);
+
+      expect(mocks.urdfPoseService.registerRobot).toHaveBeenCalledTimes(1);
+      expect(mocks.urdfPoseService.registerRobot.mock.calls[0][0]).toBe("link_base");
+      expect(mocks.logger.log).toHaveBeenCalledWith(expect.stringContaining("dummy_link"), "info");
+      // The stale entry costs no fetch either.
+      expect(mocks.backendService.getFileByUUID).toHaveBeenCalledTimes(1);
+    });
+
     it("reports a robot whose URDF is gone instead of failing the load", async () => {
-      const scene = makeScene([]);
+      // The scene HAS instances for this robot — otherwise it is a phantom entry and is
+      // skipped before the file is ever looked for, which is a different case.
+      const link = makeInstance("link-1");
+      tagInstance(link, { robotKey: "base_link", kind: "link", name: "base_link" });
+      const scene = makeScene([link]);
       (scene.custom_variables as Record<string, unknown>)["urdfRobots"] = [
         { robotKey: "base_link", fileUuid: "file-9" },
       ];

@@ -28,11 +28,13 @@ const mocks = vi.hoisted(() => ({
     tryUpdateRobotFromJointValue: vi.fn(async () => true),
   },
   urdfPersistence: { recordJointValue: vi.fn() },
+  findReachTasks: vi.fn(async () => []),
 }));
 vi.mock("@/resources/services/meta-utility", () => ({ metaUtility: mocks.metaUtility }));
 vi.mock("@/resources/services/instance-utility", () => ({ instanceUtility: mocks.instanceUtility }));
 vi.mock("@/engine/hybrid-algorithms/urdf-pose-service", () => ({ urdfPoseService: mocks.urdfPoseService }));
 vi.mock("@/engine/hybrid-algorithms/urdf-persistence", () => mocks.urdfPersistence);
+vi.mock("@/engine/hybrid-algorithms/task-reach", () => ({ findReachTasks: mocks.findReachTasks }));
 
 const { buildSimulationState, applyJointValue, clamp, toNumber } = await import(
   "@/views/simulation-window/simulationModel"
@@ -104,7 +106,11 @@ describe("simulationModel", () => {
 
   describe("buildSimulationState", () => {
     it("reports not-robotic with no sliders when no tab is open", async () => {
-      expect(await buildSimulationState()).toEqual({ isRoboticSystemSceneType: false, jointControls: [] });
+      expect(await buildSimulationState()).toEqual({
+        isRoboticSystemSceneType: false,
+        jointControls: [],
+        reachTasks: [],
+      });
     });
 
     it("reports not-robotic for another scene type, even if it somehow holds joints", async () => {

@@ -20,7 +20,46 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
  * load-bearing: `graphic-context.graphic_text` writes the three pos_name_x/y/z keys
  * first and rx/ry/rz/rw last, so indices 0-2 are the position variables and 3-6 the
  * rotation ones.
- */export class TransformControlsEvents {
+ */
+
+/**
+ * Counter-scale every descendant of `object` that does not carry its own explicit
+ * scale, so a label (or anything else attached as a plain child) keeps a constant
+ * absolute size when `object` itself is resized — a child with its own persisted
+ * `custom_variables.scale` is left alone instead.
+ *
+ * Shared by every UI that can resize a mesh (the scale gizmo here, and the Position
+ * panel's numeric Scale field) so they all leave the object in the same state that
+ * `graphic-context.setScale` recreates when the scene is reloaded — otherwise a resize
+ * that skips this step looks right live (the label just shrinks with its parent) but
+ * balloons back up on reload, when the label counter-scale gets applied for the first
+ * time against an already-small persisted scale.
+ *
+ * A no-op when `object` is not a real three.js Object3D (e.g. a plain test double)
+ * rather than assuming `userData` / `traverse` exist.
+ */
+export function counterScaleChildren(object: THREE.Object3D): void {
+  if (typeof object.traverse !== "function") return;
+  if (!object.userData) {
+    object.userData = {};
+  }
+  if (!object.userData.custom_variables) {
+    object.userData.custom_variables = {};
+  }
+  object.userData.custom_variables.scale = object.scale;
+  object.traverse((child: THREE.Object3D) => {
+    if (child == object) return;
+    const ownScale: THREE.Vector3 | undefined = child.userData?.custom_variables?.["scale"];
+    if (ownScale) {
+      child.scale.set(ownScale.x, ownScale.y, ownScale.z);
+    } else {
+      const newScale: THREE.Vector3 = new THREE.Vector3(1, 1, 1).divide(object.scale);
+      child.scale.set(newScale.x, newScale.y, newScale.z);
+    }
+  });
+}
+
+export class TransformControlsEvents {
   private globalObjectInstance = globalObject;
   private globalSelectedObject = globalSelectedObject;
   private instanceUtility = instanceUtility;
@@ -52,20 +91,7 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
     // In scale mode the children must be counter-scaled to keep their absolute size.
     // Children carrying a scale of their own are left alone.
     if (mode == "scale") {
-      if (!object.userData.custom_variables) {
-        object.userData.custom_variables = {};
-      }
-      object.userData.custom_variables.scale = object.scale;
-      object.traverse((child: THREE.Object3D) => {
-        if (child == object) return;
-        const ownScale: THREE.Vector3 | undefined = child.userData?.custom_variables?.["scale"];
-        if (ownScale) {
-          child.scale.set(ownScale.x, ownScale.y, ownScale.z);
-        } else {
-          const newScale: THREE.Vector3 = new THREE.Vector3(1, 1, 1).divide(object.scale);
-          child.scale.set(newScale.x, newScale.y, newScale.z);
-        }
-      });
+      counterScaleChildren(object);
       // Refresh the selection box around the resized object.
       this.globalSelectedObject.getObject();
     }

@@ -1,5 +1,15 @@
 import { AttributeInstance, ClassInstance, RelationclassInstance, UUID } from "@gds";
 import { globalObject } from "@/engine/global-definition";
+import {
+  applyCartesianTarget,
+  applyJointValues,
+  readJointValues,
+  type JointValues,
+  type MotionOptions,
+  type MotionResult,
+} from "@/engine/hybrid-algorithms/urdf-motion";
+import type { IkTarget } from "@/engine/hybrid-algorithms/urdf-ik";
+import { toRobotFrame } from "@/engine/hybrid-algorithms/task-reach";
 import { instanceUtility } from "./instance-utility";
 import { eventBus } from "./event-bus";
 import { metaUtility } from "./meta-utility";
@@ -257,6 +267,71 @@ export class ExpressionUtility {
   private async findAttributeInstance(instanceUUID: string, metaAttributeUUID: string): Promise<AttributeInstance | undefined> {
     const instance = await this.instanceUtility.getAnyInstance(instanceUUID);
     return this.instanceUtility.getAttributeInstanceFromAnyInstance(metaAttributeUUID, instance!.uuid, "uuid");
+  }
+
+  /**
+   * Move the modelled URDF robot's joints, for an executing process model.
+   *
+   * WHOSE DECISION IT IS. Nothing here works out whether a Task should move the robot:
+   * a command's text cannot tell a motion from a suction cup, and matching on the word
+   * "move" breaks on "MoveL" and on the first model written in another language. The
+   * procedure decides — from the flag the metamodel carries on the Primitive
+   * configuration — and only then calls this.
+   *
+   * @param values Angles by URDF joint name, or an array in the robot's own joint
+   *   order (what a controller's `angles: [j1…j6]` means).
+   * @param options `degrees: true` for a controller that speaks degrees (a URDF holds
+   *   radians); `robotKey` when more than one robot is loaded.
+   */
+  async setRobotJoints(values: JointValues, options?: MotionOptions): Promise<MotionResult> {
+    return applyJointValues(values, options ?? {});
+  }
+
+  /**
+   * A point on the canvas, in the robot's own base frame — the number to SEND.
+   *
+   * The canvas holds metres in the scene's frame, while a robot is commanded in its own
+   * frame and commonly in millimetres. A Task placed where the tool should go is
+   * therefore not yet a target: this is what turns it into one.
+   *
+   * @param point Somewhere on the canvas — a Task's `coordinates_2d`, usually.
+   * @param options `poolUuid` names the Pool whose robot the point is relative to;
+   *   `millimetres: true` returns mm for a controller that speaks them (a canvas metre
+   *   becomes 1000).
+   * @returns The converted point, or undefined when that Pool is not showing its robot.
+   */
+  robotFramePosition(
+    point: { x: number; y: number; z: number },
+    options: { poolUuid: string; millimetres?: boolean },
+  ): { x: number; y: number; z: number } | undefined {
+    return toRobotFrame(options.poolUuid, point, { millimetres: options.millimetres });
+  }
+
+  /**
+   * The modelled robot's joint angles right now, in radians, by URDF joint name.
+   *
+   * What a simulation steps FROM: moving a joint in stages needs its starting value,
+   * and that lives on the parsed URDF rather than in the process model.
+   */
+  getRobotJoints(options?: MotionOptions): Record<string, number> {
+    return readJointValues(options ?? {});
+  }
+
+  /**
+   * Move the modelled robot so its tool reaches a point, for a Cartesian command.
+   *
+   * Solved with inverse kinematics, which finds *a* pose that reaches the point rather
+   * than the one the hardware chose: no orientation, no elbow preference, no collision
+   * checking. Good enough to watch a program run, not a prediction of the robot. Where
+   * the controller can report its own joint angles, feed those to `setRobotJoints`
+   * instead — that is the truthful sync.
+   *
+   * @param target The tool position, in the robot's own frame.
+   * @param options `millimetres: true` for a controller that speaks mm (a URDF holds
+   *   metres); `tipLinkName` to solve for a link other than the end of the arm.
+   */
+  async moveRobotTo(target: IkTarget, options?: MotionOptions): Promise<MotionResult> {
+    return applyCartesianTarget(target, options ?? {});
   }
 
   /** A cached file as a data-URL, for image and icon vizReps. */

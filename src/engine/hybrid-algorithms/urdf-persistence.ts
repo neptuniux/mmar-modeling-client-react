@@ -292,6 +292,18 @@ export async function restoreRobots(sceneInstance: SceneInstance): Promise<void>
   }
 
   for (const { robotKey, fileUuid } of robots) {
+    // A scene can list a robot whose instances are gone — an import that was replaced
+    // leaves its entry behind. Registering that phantom is worse than ignoring it: it
+    // occupies the scene's robot slot with something that has no joints to move, and
+    // whatever asks the scene for "its robot" can get the empty one.
+    if ((links.get(robotKey)?.length ?? 0) === 0 && (joints.get(robotKey)?.length ?? 0) === 0) {
+      logger.log(
+        `The scene lists a robot '${robotKey}' but holds no links or joints for it — ignoring it`,
+        "info",
+      );
+      continue;
+    }
+
     try {
       const file = await loadFile(fileUuid);
       if (!file) throw new Error("the stored URDF is no longer in the file store");
@@ -320,6 +332,9 @@ export async function restoreRobots(sceneInstance: SceneInstance): Promise<void>
         1,
         links.get(robotKey) ?? [],
         joints.get(robotKey) ?? [],
+        // Which scene this robot belongs to: a process model names its robot by the
+        // scene its Pool points at, never by the URDF name this key comes from.
+        sceneInstance.uuid,
       );
     } catch (error) {
       logger.log(`Could not restore the robot '${robotKey}': ${describeError(error)}`, "error");

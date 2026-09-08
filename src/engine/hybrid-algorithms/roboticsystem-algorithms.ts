@@ -318,7 +318,15 @@ export class RoboticsystemAlgorithms {
 
       // Register the parsed robot + instance mapping so table-attribute edits can recompute poses.
       // This is intentionally done after all instances are created.
-      this.urdfPoseService.registerRobot(robotKey, robot, scaleFactor, createdLinkInstances, createdJointInstances);
+      const sceneInstance = await this.instanceUtility.getTabContextSceneInstance();
+      this.urdfPoseService.registerRobot(
+        robotKey,
+        robot,
+        scaleFactor,
+        createdLinkInstances,
+        createdJointInstances,
+        sceneInstance?.uuid,
+      );
 
       // Draw newly created instances if not yet in scene
       await this.persistencyHandler.checkIfClassinstanceInScene();
@@ -326,7 +334,6 @@ export class RoboticsystemAlgorithms {
       // Hand the URDF itself to the persistence layer, which uploads it on the next save
       // so a reopened scene can re-parse the robot rather than lose it. Held against the
       // scene rather than written into it: the XML has no business in a scene payload.
-      const sceneInstance = await this.instanceUtility.getTabContextSceneInstance();
       if (sceneInstance) rememberUrdfSource(sceneInstance.uuid, robotKey, xmlText);
     } catch (err) {
       this.logger?.log(`URDF processing error: ${describeError(err)}`, "error");

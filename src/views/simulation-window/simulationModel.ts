@@ -3,7 +3,8 @@ import { metaUtility } from "@/resources/services/meta-utility";
 import { instanceUtility } from "@/resources/services/instance-utility";
 import { urdfPoseService } from "@/engine/hybrid-algorithms/urdf-pose-service";
 import { recordJointValue } from "@/engine/hybrid-algorithms/urdf-persistence";
-import { ROBOTIC_SYSTEM_SCENETYPE_UUID, META_JOINT_UUID } from "@/constants";
+import { findReachTasks, type ReachTask } from "@/engine/hybrid-algorithms/task-reach";
+import { BPMN_SCENETYPE_UUID, ROBOTIC_SYSTEM_SCENETYPE_UUID, META_JOINT_UUID } from "@/constants";
 
 /**
  * The data half of the simulation window, as plain functions so the joint-slider maths
@@ -27,6 +28,12 @@ export type JointControl = {
 export type SimulationState = {
   isRoboticSystemSceneType: boolean;
   jointControls: JointControl[];
+  /**
+   * BPMN only: the Tasks that can be placed against a robot. Dragging one around the
+   * canvas and watching the arm follow is how a model answers "can this step happen
+   * here?" — see `task-reach`.
+   */
+  reachTasks: ReachTask[];
 };
 
 export function clamp(value: number, min: number, max: number): number {
@@ -83,12 +90,18 @@ async function readLimitBounds(jointInstance: ClassInstance): Promise<{ lower: n
  * because SimulationMode is defined per active tab.
  */
 export async function buildSimulationState(): Promise<SimulationState> {
-  const empty: SimulationState = { isRoboticSystemSceneType: false, jointControls: [] };
+  const empty: SimulationState = { isRoboticSystemSceneType: false, jointControls: [], reachTasks: [] };
 
   const sceneType = await metaUtility.getTabContextSceneType();
   const sceneInstance = await instanceUtility.getTabContextSceneInstance();
 
   if (!sceneType || !sceneInstance) return empty;
+
+  // A BPMN scene has no joints of its own to drive, but it may hold Tasks placed
+  // against a Pool's robot.
+  if (sceneType.uuid === BPMN_SCENETYPE_UUID) {
+    return { ...empty, reachTasks: await findReachTasks(sceneInstance) };
+  }
 
   if (sceneType.uuid !== ROBOTIC_SYSTEM_SCENETYPE_UUID) return empty;
 
@@ -117,7 +130,7 @@ export async function buildSimulationState(): Promise<SimulationState> {
     });
   }
 
-  return { isRoboticSystemSceneType: true, jointControls: controls };
+  return { isRoboticSystemSceneType: true, jointControls: controls, reachTasks: [] };
 }
 
 /**

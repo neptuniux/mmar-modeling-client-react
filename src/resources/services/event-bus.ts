@@ -97,6 +97,13 @@ export interface EventPayloads {
   checkForVizRepUpdate: void;
   checkForVizRepUpdateByAttributeInstance: AttributeInstance;
 
+  // A robot's joints moved: its link instances hold new poses. Published by
+  // urdf-pose-service, which is the one place that writes them, so every driver — a
+  // simulation slider, a Joint Origin edit, an executing process model — reaches the
+  // copies drawn elsewhere (a BPMN Pool's robot) at the moment of the move rather than
+  // on the next 1 Hz sweep.
+  robotPoseChanged: void;
+
   // Undo / redo history
   historyRecord: HistoryRecordPayload;
   remoteSceneInstanceChanged: RemoteSceneInstanceChangedPayload;

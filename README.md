@@ -25,6 +25,9 @@ Interaction is a 5-state machine (`globalStateObject`): `0 Selection (drag)`,
 Every change to the open scene is undoable (`Ctrl/⌘+Z`, `Ctrl/⌘+Shift+Z` or `Ctrl/⌘+Y`,
 and the toolbar buttons) — see [Undo/redo](#undoredo).
 
+For the URDF/robotics and BPMN-execution feature set — importing a robot, drawing it in a
+Pool, and turning a Task into a command a machine runs — see **[ROBOTICS.md](ROBOTICS.md)**.
+
 ## Tech stack
 
 | Concern        | Choice                                              |

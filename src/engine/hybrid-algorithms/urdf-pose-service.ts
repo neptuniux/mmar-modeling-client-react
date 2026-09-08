@@ -30,6 +30,8 @@ type RobotRecord = {
   scaleFactor: number;
   linkInstances: Map<string, ClassInstance>;
   jointInstances: Map<string, ClassInstance>;
+  /** The Robotic system scene this robot was imported into or restored from. */
+  sceneInstanceUuid?: string;
 };
 
 /**
@@ -75,6 +77,7 @@ export class UrdfPoseService {
     scaleFactor: number,
     linkInstances: ClassInstance[],
     jointInstances: ClassInstance[],
+    sceneInstanceUuid?: string,
   ) {
     const linkMap = new Map<string, ClassInstance>();
     const jointMap = new Map<string, ClassInstance>();
@@ -98,6 +101,7 @@ export class UrdfPoseService {
       scaleFactor,
       linkInstances: linkMap,
       jointInstances: jointMap,
+      sceneInstanceUuid,
     });
     // This key has a robot again, so a later loss of one is worth reporting afresh.
     this.warnedRobotKeys.delete(robotKey);
@@ -268,6 +272,47 @@ export class UrdfPoseService {
     return Number.isFinite(n) ? n : undefined;
   }
 
+  /**
+   * The robots registered right now. A caller that did not import them — the execution
+   * procedure driving a robot from a BPMN Task, say — has no robot key of its own, and
+   * a scene holding exactly one robot is the ordinary case.
+   */
+  registeredRobotKeys(): string[] {
+    return [...this.robotsByKey.keys()];
+  }
+
+  /**
+   * The robots belonging to one Robotic system scene.
+   *
+   * A process model identifies a robot by the SCENE its Pool points at, not by the
+   * robot key (which is a URDF name it never sees), so this is the lookup that turns
+   * "the robot of this Pool" into something drivable — and the one that keeps two
+   * Pools driving two different arms.
+   */
+  robotKeysForScene(sceneInstanceUuid: string): string[] {
+    return [...this.robotsByKey.entries()]
+      .filter(([, record]) => record.sceneInstanceUuid === sceneInstanceUuid)
+      .map(([robotKey]) => robotKey);
+  }
+
+  /** The parsed URDF behind a robot key, for a caller that needs its kinematics. */
+  robotOf(robotKey: string): URDFRobot | undefined {
+    return this.robotsByKey.get(robotKey)?.robot;
+  }
+
+  /** The Joint instances of a robot, by URDF joint name. */
+  jointInstancesOf(robotKey: string): Map<string, ClassInstance> {
+    return new Map(this.robotsByKey.get(robotKey)?.jointInstances ?? []);
+  }
+
+  /**
+   * The Link instances of a robot, by URDF link name — the instances whose poses this
+   * service moves, which is what anything DRAWING that robot elsewhere has to read.
+   */
+  linkInstancesOf(robotKey: string): Map<string, ClassInstance> {
+    return new Map(this.robotsByKey.get(robotKey)?.linkInstances ?? []);
+  }
+
   /** Robot keys already reported as missing, so a dragged slider reports once. */
   private warnedRobotKeys = new Set<string>();
 
@@ -326,6 +371,16 @@ export class UrdfPoseService {
   }
 
   private applyRobotWorldPoses(record: RobotRecord) {
+    this.applyPosesToInstances(record);
+    // Announce it: a robot can be DRAWN somewhere other than its own scene (a BPMN
+    // Pool shows a copy), and those copies follow the link instances rather than the
+    // three.js objects updated below. Publishing here — the single place new poses are
+    // written — is what lets an animated move show up there frame by frame instead of
+    // whenever the next periodic sweep happens to run.
+    this.eventAggregator.publish("robotPoseChanged");
+  }
+
+  private applyPosesToInstances(record: RobotRecord) {
     // Update all known link instances
     record.linkInstances.forEach((instance, linkName) => {
       const linkObj = this.getUrdfLink(record.robot, linkName);
@@ -360,12 +415,29 @@ export class UrdfPoseService {
     // scene PATCH 500s. Always write the plain object shape the gds expects.
     instance.rotation = { x: rot.x, y: rot.y, z: rot.z, w: rot.w };
 
-    // Also update the existing THREE object in the scene immediately, if present.
-    const sceneObj = this.globalObjectInstance.scene?.getObjectByProperty?.("uuid", instance.uuid);
+    // Also update the existing THREE object immediately, if present.
+    //
+    // Searched across EVERY open tab, not just the active one: a robot can now be driven
+    // while its own scene sits in a background tab (an executing process model does
+    // exactly that from a BPMN tab), and looking only at the active scene left that
+    // tab's objects on the pose they had when the user last looked at it.
+    const sceneObj = this.findDrawnObject(instance.uuid);
     if (sceneObj) {
       sceneObj.position.set(instance.coordinates_2d.x, instance.coordinates_2d.y, instance.coordinates_2d.z);
       sceneObj.quaternion.copy(rot);
     }
+  }
+
+  /** The drawn object for an instance, in whichever open tab holds it. */
+  private findDrawnObject(uuid: string): THREE.Object3D | undefined {
+    const active = this.globalObjectInstance.scene?.getObjectByProperty?.("uuid", uuid);
+    if (active) return active;
+
+    for (const tab of this.globalObjectInstance.tabContext ?? []) {
+      const found = tab?.threeScene?.getObjectByProperty?.("uuid", uuid);
+      if (found) return found;
+    }
+    return undefined;
   }
 
   private async readOriginTable(originAttributeInstance: AttributeInstance) {

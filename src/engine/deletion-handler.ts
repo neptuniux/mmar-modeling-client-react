@@ -9,6 +9,7 @@ import { logger } from "@/resources/services/logger";
 import { backendService } from "@/resources/services/backend-service";
 import { eventBus } from "@/resources/services/event-bus";
 import { publishLocalChange } from "@/resources/collaboration/local-change-publisher";
+import { clearReferencesTo } from "@/resources/services/reference-cleanup";
 
 /**
  * Deletes instances and everything that hangs off them.
@@ -62,6 +63,23 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
 
     //delete connected portInstances
     await this.deleteConnectedPortInstances(classInstance);
+
+    // Clear the reference ATTRIBUTES that point at it. Relations are handled above, but
+    // a reference attribute is not a relation and used to be left holding a role
+    // instance for a deleted instance — harmless on the canvas, and fatal on the next
+    // save, where it reaches a foreign key and takes the whole scene down with it.
+    const clearedReferences = clearReferencesTo(
+      sceneInstance,
+      new Set([classInstance.uuid, ...classInstance.port_instance.map((port) => port.uuid)]),
+      this.globalObjectInstance.role_instances,
+    );
+    for (const reference of clearedReferences) {
+      this.logger.log(
+        `Cleared "${reference.attributeName}" on ${reference.sourceName || reference.sourceUuid}: ` +
+          `it referenced the deleted ${classInstance.name}`,
+        "info",
+      );
+    }
 
     sceneInstance.class_instances.splice(index, 1);
 

@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 import type { JointControl } from "@/views/simulation-window/simulationModel";
+import type { ReachTask } from "@/engine/hybrid-algorithms/task-reach";
 
 /**
  * P12 component tests for the SimulationWindow (plan §9 P12: "simulation window renders
@@ -13,14 +14,26 @@ import type { JointControl } from "@/views/simulation-window/simulationModel";
  * The model module is mocked rather than the services beneath it, because importing the
  * real one transitively pulls the REAL @/engine/global-definition (WebGLRenderer at
  * module scope) — the rule three phases deep now (P9 persistency-handler, P10
- * shared-doc-service, P11 renderers).
+ * shared-doc-service, P11 renderers). `task-reach` is mocked for the same reason: the
+ * component reaches it directly for the reach check, and it leads to the engine too.
  *
  * Testing-library facts this file depends on (P11 notes): vitest `globals` is off, so
  * cleanup() must be called by hand, and a store/bus write after render needs act().
  */
 
 const mocks = vi.hoisted(() => ({
-  buildSimulationState: vi.fn(async () => ({ isRoboticSystemSceneType: false, jointControls: [] as JointControl[] })),
+  buildSimulationState: vi.fn(async () => ({
+    isRoboticSystemSceneType: false,
+    jointControls: [] as JointControl[],
+    reachTasks: [] as ReachTask[],
+  })),
+  previewTaskReach: vi.fn(async (_t: ReachTask) => ({ reached: true, error: 0 })),
+  capturePose: vi.fn(() => ({ sceneInstanceUuid: "robot-scene", jointValues: { shoulder: 0 } })),
+  restorePose: vi.fn(async () => undefined),
+  positionSignature: vi.fn((task: ReachTask) => {
+    const p = (task.instance as unknown as { coordinates_2d?: { x: number; y: number; z: number } }).coordinates_2d;
+    return p ? `${p.x},${p.y},${p.z}` : "";
+  }),
   applyJointValue: vi.fn(async (_ctrl: JointControl, raw: unknown) => Number(raw)),
   instanceUtility: { getTabContextSceneInstance: vi.fn(async (): Promise<{ uuid: string } | undefined> => undefined) },
   logger: { log: vi.fn() },
@@ -28,6 +41,12 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/views/simulation-window/simulationModel", () => ({
   buildSimulationState: mocks.buildSimulationState,
   applyJointValue: mocks.applyJointValue,
+}));
+vi.mock("@/engine/hybrid-algorithms/task-reach", () => ({
+  previewTaskReach: mocks.previewTaskReach,
+  capturePose: mocks.capturePose,
+  restorePose: mocks.restorePose,
+  positionSignature: mocks.positionSignature,
 }));
 vi.mock("@/resources/services/instance-utility", () => ({ instanceUtility: mocks.instanceUtility }));
 vi.mock("@/resources/services/logger", () => ({ logger: mocks.logger }));
@@ -51,14 +70,22 @@ function control(uuid: string, displayName: string, over: Partial<JointControl> 
 }
 
 function roboticScene(...controls: JointControl[]) {
-  mocks.buildSimulationState.mockResolvedValue({ isRoboticSystemSceneType: true, jointControls: controls });
+  mocks.buildSimulationState.mockResolvedValue({
+    isRoboticSystemSceneType: true,
+    jointControls: controls,
+    reachTasks: [],
+  });
 }
 
 describe("SimulationWindow", () => {
   beforeEach(() => {
     cleanup();
     vi.clearAllMocks();
-    mocks.buildSimulationState.mockResolvedValue({ isRoboticSystemSceneType: false, jointControls: [] });
+    mocks.buildSimulationState.mockResolvedValue({
+      isRoboticSystemSceneType: false,
+      jointControls: [],
+      reachTasks: [],
+    });
     mocks.instanceUtility.getTabContextSceneInstance.mockResolvedValue({ uuid: ACTIVE_SCENE_UUID });
   });
 

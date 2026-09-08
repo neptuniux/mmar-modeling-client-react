@@ -203,6 +203,10 @@ export class HybridAlgorithmsService {
       // read; nothing is rebuilt or re-fetched.
       if (sceneInstance?.uuid_scene_type == BPMN_SCENETYPE_UUID) {
         await this.bpmnAlgorithms.checkPoolRobots(sceneInstance);
+        // The Pool shows a COPY of the referenced robot, so a joint that moved — a
+        // simulation slider, or a Task an executing process model just ran — reaches
+        // the copy here and nowhere else.
+        this.bpmnAlgorithms.syncRobotPoses();
       }
     }
   }

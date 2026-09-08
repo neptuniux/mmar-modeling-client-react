@@ -2,28 +2,35 @@ import * as THREE from "three";
 import type { ClassInstance, SceneInstance } from "@gds";
 import { globalObject } from "@/engine/global-definition";
 import { GraphicContext } from "@/engine/graphic-context";
-import { hydrateMesh } from "@/engine/hybrid-algorithms/urdf-persistence";
+import { hydrateMesh, readInstanceMeta, restoreRobots } from "@/engine/hybrid-algorithms/urdf-persistence";
+import { urdfPoseService } from "@/engine/hybrid-algorithms/urdf-pose-service";
 import { instanceUtility } from "@/resources/services/instance-utility";
+import { eventBus } from "@/resources/services/event-bus";
 import { backendService } from "@/resources/services/backend-service";
 import { logger } from "@/resources/services/logger";
 import { describeError } from "@/resources/util/describe-error";
 import {
   POOL_CLASS_UUID,
+  POOL_TARGET_SYSTEM_ATTRIBUTE_UUID,
   ROBOTIC_SYSTEM_SCENETYPE_UUID,
   SHOW_REFERENCED_URDF_ATTRIBUTE_NAME,
   SHOW_REFERENCED_URDF_ATTRIBUTE_UUID,
+  ROBOT_BASE_ATTRIBUTE_NAMES,
 } from "@/constants";
 
 /**
  * Hybrid algorithms for the BPMN metamodel, reached through `hybridAlgorithmsService`
  * and never directly.
  *
- * A Pool can reference a Robotic system scene and switch the robot on with its
- * "Show referenced URDF system" attribute. When it is on, the referenced robot is built
- * from the meshes that scene has STORED (`urdf-persistence`) and hung under the Pool's
- * own three.js object, centred on it and scaled to fit inside it. Being a child is what
- * makes the robot follow a dragged Pool for free, and what makes it disappear with a
- * deleted one.
+ * A Pool reaches its robot two references away — Pool ▶ Configuration system ▶ Robotic
+ * system scene — and switches it on with its "Show referenced URDF system" attribute.
+ * When it is on, that robot is built from the meshes the scene has STORED
+ * (`urdf-persistence`) and hung under the Pool's own three.js object at TRUE SCALE —
+ * 1 canvas unit is 1 metre here, as everywhere else in this client — at the base the
+ * Configuration system declares. Being a child is what makes the robot follow a dragged
+ * Pool for free, and what makes it disappear with a deleted one; and because the Pool's
+ * position is therefore the robot's place in the cell, dragging the Pool is how the
+ * model is kept in step with where the machine actually stands.
  *
  * The robot is a PICTURE of the referenced scene, not a second copy of it: the meshes
  * carry no instance uuids and are never added to `dragObjects`, so nothing selects,
@@ -47,18 +54,35 @@ type PoolRobot = {
   attachedTo: THREE.Object3D;
   /** The referenced scene it was built from, so re-pointing the reference rebuilds. */
   sceneInstanceUuid: string;
+  /**
+   * The mesh drawn for each link, by URDF LINK NAME.
+   *
+   * By name and not by instance, because the instance a copy is built from is not
+   * necessarily the one that later moves. The same scene can exist twice in the client:
+   * a Pool loads it from the server when the scene tree has not lazily loaded it yet,
+   * and opening that scene in a tab then registers the robot against the TREE's own
+   * objects. Holding the built-from instances made the copy follow an orphan and freeze.
+   */
+  meshesByLink: Map<string, THREE.Mesh>;
+  /** The instances it was built from — used only while no robot is registered. */
+  builtFrom: Map<string, ClassInstance>;
 };
 
 /** Marks the group so a pass can find one it did not put in its own cache. */
 const ROBOT_GROUP_TAG = "bpmnPoolRobot";
 
-/** How much of the Pool's footprint the robot is allowed to fill. */
-const POOL_FILL = 0.8;
-
 export class BpmnAlgorithms {
   private globalObjectInstance = globalObject;
   private instanceUtility = instanceUtility;
   private logger = logger;
+
+  constructor() {
+    // Follow a moving robot at ITS pace, not the 1 Hz sweep's: a simulated move is a
+    // few hundred milliseconds of animation, which a once-a-second copy renders as one
+    // jump, or misses entirely. The sweep still runs — it is what heals a Pool whose
+    // object was replaced — but it is no longer what carries the motion.
+    eventBus.subscribe("robotPoseChanged", () => this.syncRobotPoses());
+  }
 
   /** Drawn robots, by Pool instance uuid. */
   private robotsByPool = new Map<string, PoolRobot>();
@@ -68,6 +92,9 @@ export class BpmnAlgorithms {
 
   /** Referenced scenes already fetched, by uuid: the tick must not re-fetch them. */
   private sceneCache = new Map<string, SceneInstance>();
+
+  /** What a Configuration system leads to: its robotic scene, and the robot's base. */
+  private deploymentByConfiguration = new Map<string, { sceneInstanceUuid: string; configuration?: ClassInstance }>();
 
   /**
    * Bring every Pool of the open scene in line with its flag: draw the robot for a Pool
@@ -98,8 +125,9 @@ export class BpmnAlgorithms {
     // an object to hang the robot under.
     if (!poolObject) return;
 
-    const referencedSceneUuid = referencedRoboticSceneUuid(pool);
-    if (!referencedSceneUuid) return;
+    const deployment = await this.deploymentFor(pool);
+    if (!deployment?.sceneInstanceUuid) return;
+    const referencedSceneUuid = deployment.sceneInstanceUuid;
 
     const existing = this.robotsByPool.get(pool.uuid);
     if (
@@ -108,7 +136,11 @@ export class BpmnAlgorithms {
       existing.group.parent === poolObject &&
       existing.sceneInstanceUuid === referencedSceneUuid
     ) {
-      return; // Already correct — the common case on the 1 Hz tick.
+      // Already the right robot on the right object. Its PLACE is re-read each pass:
+      // the base frame is an attribute like any other, and editing it should move the
+      // robot without rebuilding it.
+      placeInPool(existing.group, poolObject, baseFrameOf(deployment.configuration));
+      return; // The common case on the 1 Hz tick.
     }
 
     if (this.building.has(pool.uuid)) return;
@@ -121,8 +153,8 @@ export class BpmnAlgorithms {
       const robotScene = await this.loadRoboticScene(referencedSceneUuid);
       if (!robotScene) return;
 
-      const group = await this.buildRobot(robotScene);
-      if (!group) {
+      const built = await this.buildRobot(robotScene);
+      if (!built) {
         this.logger.log(
           `The scene '${robotScene.name}' has no stored robot meshes to show. ` +
             `Open it, import the robot's .zip (File > Map file to SceneInstance) and save.`,
@@ -131,17 +163,32 @@ export class BpmnAlgorithms {
         return;
       }
 
-      fitIntoPool(group, poolObject);
-      poolObject.add(group);
+      placeInPool(built.group, poolObject, baseFrameOf(deployment.configuration));
+      poolObject.add(built.group);
       this.robotsByPool.set(pool.uuid, {
-        group,
+        group: built.group,
         attachedTo: poolObject,
         sceneInstanceUuid: referencedSceneUuid,
+        meshesByLink: built.meshesByLink,
+        builtFrom: built.builtFrom,
       });
       this.globalObjectInstance.render = true;
     } finally {
       this.building.delete(pool.uuid);
     }
+  }
+
+  /**
+   * The group a Pool's robot is drawn in, and the scene that robot belongs to.
+   *
+   * The group carries the whole mapping from the robot's own coordinates to the BPMN
+   * canvas — the fit-to-Pool scale, the centring offset and the Pool's own placement —
+   * so `group.worldToLocal(point)` turns somewhere on the canvas into somewhere in the
+   * robot's frame. That is what lets a Task be placed in the model and asked of the arm.
+   */
+  robotViewOfPool(poolUuid: string): { group: THREE.Group; sceneInstanceUuid: string } | undefined {
+    const robot = this.robotsByPool.get(poolUuid);
+    return robot ? { group: robot.group, sceneInstanceUuid: robot.sceneInstanceUuid } : undefined;
   }
 
   /** Detach and free the Pool's robot, if it has one. */
@@ -153,6 +200,51 @@ export class BpmnAlgorithms {
     disposeGroup(existing.group);
     this.robotsByPool.delete(poolUuid);
     this.globalObjectInstance.render = true;
+  }
+
+  /**
+   * The Robotic system scene behind a Pool, TWO references away.
+   *
+   *     Pool ──ref──▶ Configuration system ──ref──▶ Robotic system scene
+   *
+   * The Pool's "Target system entity" attribute is the reference that leads there, and
+   * it is tried first. Its SIBLINGS are then tried too — a Pool also references a
+   * Communication configuration, which leads nowhere, so the cost of an attribute
+   * re-created under a new uuid is one wasted lookup rather than a Pool that shows
+   * nothing. A Pool that names the scene directly is honoured as well: that is one hop
+   * of the same walk.
+   *
+   * The HOP is cached, not the Pool's own reference: re-pointing a Pool at a different
+   * configuration is seen on the next tick, while the fetch behind it happens once.
+   */
+  private async deploymentFor(
+    pool: ClassInstance,
+  ): Promise<{ sceneInstanceUuid: string; configuration?: ClassInstance } | undefined> {
+    const direct = referencesOf(pool);
+    if (direct.scenes.length > 0) return { sceneInstanceUuid: direct.scenes[0] };
+
+    for (const configUuid of direct.classInstances) {
+      const cached = this.deploymentByConfiguration.get(configUuid);
+      if (cached !== undefined) {
+        if (cached.sceneInstanceUuid) return cached;
+        continue; // Known not to lead to a scene.
+      }
+
+      const configuration =
+        (await this.instanceUtility.getClassInstance(configUuid).catch(() => undefined)) ??
+        (await backendService.classesInstancesGET(configUuid));
+      const sceneUuid = referencesOf(configuration as ClassInstance | undefined).scenes[0];
+      // An empty uuid records a configuration that references no scene, so the next tick
+      // does not fetch it again just to learn the same thing.
+      const deployment = {
+        sceneInstanceUuid: sceneUuid ?? "",
+        configuration: configuration as ClassInstance | undefined,
+      };
+      this.deploymentByConfiguration.set(configUuid, deployment);
+      if (sceneUuid) return deployment;
+    }
+
+    return undefined;
   }
 
   /**
@@ -170,8 +262,44 @@ export class BpmnAlgorithms {
 
     if (sceneInstance.uuid_scene_type !== ROBOTIC_SYSTEM_SCENETYPE_UUID) return undefined;
 
+    // Register the robot even though this scene is not the open one. That is what puts
+    // a URDF behind the Pool's copy: an executing process model can then drive its
+    // joints (expressionUtility.setRobotJoints), and `syncRobotPoses` carries the
+    // result onto the meshes below. Without it the Pool would show a robot that
+    // nothing can move.
+    await restoreRobots(sceneInstance);
+
     this.sceneCache.set(uuid, sceneInstance);
     return sceneInstance;
+  }
+
+  /**
+   * Carry the link instances' current poses onto the meshes drawn for them.
+   *
+   * The Pool's robot is a copy, not the instances themselves, so a joint move — a
+   * simulation slider, or a Task the execution procedure just ran — reaches it only
+   * here. Cheap enough for the 1 Hz pass: a vector and a quaternion per link, and
+   * nothing at all when the scene holds no Pool robot.
+   */
+  syncRobotPoses(): void {
+    for (const robot of this.robotsByPool.values()) {
+      // Read from whichever instances the pose service is moving RIGHT NOW, found
+      // through the scene rather than the objects this copy was built from. That is
+      // what keeps a Pool's robot alive after the same scene is opened in a tab and
+      // re-registered against a different copy of its instances.
+      const [robotKey] = urdfPoseService.robotKeysForScene(robot.sceneInstanceUuid);
+      const live = robotKey ? urdfPoseService.linkInstancesOf(robotKey) : undefined;
+
+      for (const [linkName, mesh] of robot.meshesByLink) {
+        const link = live?.get(linkName) ?? robot.builtFrom.get(linkName);
+        if (!link) continue;
+        const position = link.coordinates_2d;
+        if (position) mesh.position.set(position.x, position.y, position.z);
+        const rotation = link.rotation;
+        if (rotation) mesh.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+      }
+    }
+    if (this.robotsByPool.size > 0) this.globalObjectInstance.render = true;
   }
 
   /**
@@ -181,9 +309,18 @@ export class BpmnAlgorithms {
    * Returns undefined when not one link had a mesh to draw, which is what a robotic
    * scene saved before its meshes were stored looks like.
    */
-  private async buildRobot(robotScene: SceneInstance): Promise<THREE.Group | undefined> {
+  private async buildRobot(robotScene: SceneInstance): Promise<
+    | {
+        group: THREE.Group;
+        meshesByLink: Map<string, THREE.Mesh>;
+        builtFrom: Map<string, ClassInstance>;
+      }
+    | undefined
+  > {
     const group = new THREE.Group();
     group.userData[ROBOT_GROUP_TAG] = robotScene.uuid;
+    const meshesByLink = new Map<string, THREE.Mesh>();
+    const builtFrom = new Map<string, ClassInstance>();
 
     for (const link of robotScene.class_instances ?? []) {
       const vizRep = await hydrateMesh(link);
@@ -206,9 +343,13 @@ export class BpmnAlgorithms {
       // asked for a recursive one.
       mesh.raycast = () => undefined;
       group.add(mesh);
+      // Keyed by the URDF link name, which is the same on every copy of the scene.
+      const linkName = readInstanceMeta(link)?.name ?? link.uuid;
+      meshesByLink.set(linkName, mesh);
+      builtFrom.set(linkName, link);
     }
 
-    return group.children.length > 0 ? group : undefined;
+    return group.children.length > 0 ? { group, meshesByLink, builtFrom } : undefined;
   }
 }
 
@@ -225,17 +366,35 @@ function showsRobot(pool: ClassInstance): boolean {
 }
 
 /**
- * The scene instance this Pool references, if any. Found by SHAPE rather than by the
- * reference attribute's name or uuid: a reference records its target on the role
- * instance, so a Pool has at most one attribute carrying a scene reference and that is
- * the robot's scene. `loadRoboticScene` is what confirms the target is a robotic one.
+ * The instances a reference on `instance` points at, by kind.
+ *
+ * The Pool's "Target system entity" reference comes FIRST among the class instances: a
+ * Pool holds more than one reference now (the Configuration system and the
+ * Communication configuration), and the target system is the one that leads to a robot.
+ * The others are still followed after it, so an attribute re-created under a new uuid
+ * only costs a fetch rather than the feature.
  */
-function referencedRoboticSceneUuid(pool: ClassInstance): string | undefined {
-  for (const attributeInstance of pool.attribute_instance ?? []) {
-    const referenced = attributeInstance.role_instance_from?.uuid_has_reference_scene_instance;
-    if (referenced) return referenced;
+function referencesOf(instance: ClassInstance | undefined): {
+  scenes: string[];
+  classInstances: string[];
+} {
+  const scenes: string[] = [];
+  const classInstances: string[] = [];
+  let targetSystem: string | undefined;
+
+  for (const attributeInstance of instance?.attribute_instance ?? []) {
+    const role = attributeInstance.role_instance_from;
+    if (role?.uuid_has_reference_scene_instance) scenes.push(role.uuid_has_reference_scene_instance);
+    if (!role?.uuid_has_reference_class_instance) continue;
+
+    if (attributeInstance.uuid_attribute === POOL_TARGET_SYSTEM_ATTRIBUTE_UUID) {
+      targetSystem = role.uuid_has_reference_class_instance;
+    } else {
+      classInstances.push(role.uuid_has_reference_class_instance);
+    }
   }
-  return undefined;
+
+  return { scenes, classInstances: targetSystem ? [targetSystem, ...classInstances] : classInstances };
 }
 
 /**
@@ -246,33 +405,115 @@ function referencedRoboticSceneUuid(pool: ClassInstance): string | undefined {
  * Pool whose vizRep sizes itself some other way. The robot is dropped onto the Pool's top
  * face — z is up here, in the scene and in URDF alike — so it stands on the Pool instead
  * of being buried in it.
+ *
+ * Everything here is measured in the POOL'S OWN FRAME (`measureLocalBox`), never in world
+ * space, because the group being placed is a child of the Pool: a scale and an offset
+ * expressed in the Pool's local space have to be computed from sizes in that same space.
+ * See `measureLocalBox` for what a world measurement did to a rotated Pool.
  */
-function fitIntoPool(group: THREE.Group, poolObject: THREE.Object3D): void {
-  const poolBox = new THREE.Box3().setFromObject(poolObject);
-  const robotBox = new THREE.Box3().setFromObject(group);
-  if (poolBox.isEmpty() || robotBox.isEmpty()) return;
+/**
+ * Place the robot in the Pool at TRUE SCALE.
+ *
+ * The client draws in metres — a URDF import writes URDF coordinates straight into the
+ * canvas — so the robot is drawn 1:1 and put where the Configuration system says its
+ * base stands. That is what makes the model a placement rather than a picture: a Task's
+ * position relative to the robot is then a real distance, and a target read off the
+ * canvas is a coordinate the machine can be sent.
+ *
+ * The base offset is read in the POOL's frame, because the group is the Pool's child and
+ * the Pool's own position is the robot's place in the cell. `z` is measured from the
+ * Pool's top face, so a base at 0 stands on it instead of being buried in it.
+ */
+function placeInPool(group: THREE.Group, poolObject: THREE.Object3D, frame: RobotBaseFrame): void {
+  // A metre must stay a metre IN THE WORLD. The robot is the Pool's child, so a Pool the
+  // engine has scaled would otherwise scale the robot with it and the model would no
+  // longer measure anything.
+  const poolScale = poolObject.getWorldScale(new THREE.Vector3());
+  group.scale.setScalar(poolScale.x !== 0 ? 1 / poolScale.x : 1);
 
-  const poolSize = poolBox.getSize(new THREE.Vector3());
-  const robotSize = robotBox.getSize(new THREE.Vector3());
+  group.quaternion.setFromAxisAngle(new THREE.Vector3(0, 0, 1), frame.yaw);
 
-  // Uniform, so the robot keeps its proportions; driven by the tighter of the two
-  // footprint axes. A zero-extent axis (a perfectly flat robot) is not a constraint.
-  const ratios = [
-    robotSize.x > 0 ? (poolSize.x * POOL_FILL) / robotSize.x : Infinity,
-    robotSize.y > 0 ? (poolSize.y * POOL_FILL) / robotSize.y : Infinity,
-  ].filter((ratio) => Number.isFinite(ratio) && ratio > 0);
-  const scale = ratios.length > 0 ? Math.min(...ratios) : 1;
-  group.scale.setScalar(scale);
+  const poolBox = measurePoolBox(poolObject, group);
+  const topOfPool = poolBox ? poolBox.max.z : 0;
+  group.position.set(frame.x, frame.y, topOfPool + frame.z);
+}
 
-  // The group is a child of the Pool, so it is placed in the Pool's LOCAL space: the
-  // offsets below are the robot's own box brought back to the Pool's centre and top.
-  const robotCentre = robotBox.getCenter(new THREE.Vector3());
-  const poolCentre = poolBox.getCenter(new THREE.Vector3());
-  group.position.set(
-    -robotCentre.x * scale,
-    -robotCentre.y * scale,
-    (poolBox.max.z - poolCentre.z) - robotBox.min.z * scale,
-  );
+/**
+ * The Pool's own bounding box, in the POOL'S LOCAL SPACE, with `exclude` (its own robot)
+ * left out.
+ *
+ * Local and not world, because a world axis-aligned box of a ROTATED Pool is not the
+ * Pool's shape: stand a Pool upright and its world box's y extent collapses to the Pool's
+ * thickness. The robot is placed in the Pool's frame anyway, so that is the frame to
+ * measure in. Excluding the robot keeps a measurement from feeding the previous placement
+ * back into the next one.
+ */
+function measurePoolBox(poolObject: THREE.Object3D, exclude?: THREE.Object3D): THREE.Box3 | undefined {
+  const parent = exclude?.parent;
+  if (parent === poolObject) exclude!.removeFromParent();
+
+  poolObject.updateWorldMatrix(true, true);
+  const intoPool = new THREE.Matrix4().copy(poolObject.matrixWorld).invert();
+  const toPool = new THREE.Matrix4();
+  const corner = new THREE.Vector3();
+  const box = new THREE.Box3();
+
+  poolObject.traverse((child) => {
+    const geometry = (child as THREE.Mesh).geometry;
+    if (!geometry) return;
+    if (!geometry.boundingBox) geometry.computeBoundingBox();
+    const bounds = geometry.boundingBox;
+    if (!bounds) return;
+
+    // Each mesh's own corners, brought into the Pool's frame — an axis-aligned box
+    // cannot simply be rotated, so the corners are what has to be transformed.
+    toPool.multiplyMatrices(intoPool, child.matrixWorld);
+    for (let index = 0; index < 8; index++) {
+      corner.set(
+        index & 1 ? bounds.max.x : bounds.min.x,
+        index & 2 ? bounds.max.y : bounds.min.y,
+        index & 4 ? bounds.max.z : bounds.min.z,
+      );
+      box.expandByPoint(corner.applyMatrix4(toPool));
+    }
+  });
+
+  if (parent === poolObject) parent.add(exclude!);
+  return box.isEmpty() ? undefined : box;
+}
+
+/** Where a robot's base stands within its Pool, in metres and radians. */
+type RobotBaseFrame = { x: number; y: number; z: number; yaw: number };
+
+/**
+ * The base frame declared on the Configuration system, defaulting to the Pool's own
+ * origin facing 0 — which is what a deployment that has not been surveyed yet means.
+ *
+ * Attribute names are matched loosely (case, spaces, punctuation and any unit suffix are
+ * ignored), because these are attributes added to a metamodel by hand: "Base X",
+ * "Base X (m)" and "base_x" are all the same declaration.
+ */
+function baseFrameOf(configuration: ClassInstance | undefined): RobotBaseFrame {
+  const read = (name: string): number => {
+    const wanted = normaliseAttributeName(name);
+    const attribute = configuration?.attribute_instance?.find(
+      (candidate) => normaliseAttributeName(candidate?.name ?? "").startsWith(wanted),
+    );
+    const value = Number(attribute?.value);
+    return Number.isFinite(value) ? value : 0;
+  };
+
+  return {
+    x: read(ROBOT_BASE_ATTRIBUTE_NAMES.x),
+    y: read(ROBOT_BASE_ATTRIBUTE_NAMES.y),
+    z: read(ROBOT_BASE_ATTRIBUTE_NAMES.z),
+    // Declared in degrees, applied in radians.
+    yaw: read(ROBOT_BASE_ATTRIBUTE_NAMES.yaw) * (Math.PI / 180),
+  };
+}
+
+function normaliseAttributeName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 /** Free the GPU resources of a group that is no longer shown. */
