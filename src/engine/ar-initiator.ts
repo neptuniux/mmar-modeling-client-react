@@ -6,6 +6,7 @@ import { FontLoader } from "three/examples/jsm/loaders/FontLoader.js";
 import { TextGeometry } from "three/examples/jsm/geometries/TextGeometry.js";
 import { globalObject } from "@/engine/global-definition";
 import { animator } from "@/engine/animator";
+import { arProcedureMenu } from "@/engine/ar-procedure-menu";
 import { logger } from "@/resources/services/logger";
 
 /**
@@ -22,6 +23,8 @@ import { logger } from "@/resources/services/logger";
  *   - grip button (controllers only)          → recenter the world origin here
  *   - trigger / pinch on empty space, held    → recenter the world origin here
  *     (the fallback for hand tracking, which has no grip button)
+ *   - A / X button (controllers only)         → toggle the 3D procedure menu; a
+ *     trigger press while it is open runs the row the pointer ray is on
  *
  * Each controller carries a thin pointer ray with a reticle that snaps onto the
  * nearest grabbable object, so aiming with a physical controller is visible the way
@@ -57,6 +60,9 @@ const POINTER_HIT_COLOR = 0xffe14d;
  * is too noisy to rotate by. Translation keeps tracking.
  */
 const MIN_TWO_HAND_SEPARATION = 0.08;
+
+/** `xr-standard` gamepad button index of the A (right) / X (left) face button. */
+const FACE_BUTTON_INDEX = 4;
 
 const UP = new THREE.Vector3(0, 1, 0);
 const ONE = new THREE.Vector3(1, 1, 1);
@@ -103,10 +109,14 @@ export class ArInitiator {
    */
   private twoHandDrag: { originStart: THREE.Matrix4; handStart: THREE.Matrix4; lastYaw: number; yawAnchored: boolean } | null = null;
 
+  /** Rising-edge latch for the A / X button poll (it raises no WebXR events). */
+  private faceButtonWasDown = false;
+
   private xrListenersRegistered = false;
 
   private globalObjectInstance = globalObject;
   private animator = animator;
+  private procedureMenu = arProcedureMenu;
   private logger = logger;
 
   /** Turn WebXR on and wire the session lifecycle. Idempotent. */
@@ -130,13 +140,35 @@ export class ArInitiator {
     // would otherwise freeze the AR view. Force it true while presenting.
     if (this.globalObjectInstance.renderer.xr.isPresenting) {
       this.globalObjectInstance.render = true;
+      this.pollFaceButton();
       this.updateCanvasDrag();
+      this.procedureMenu.updateHover([this.controller1, this.controller2]);
       this.updatePointerRays();
     }
 
     void this.animator.animate();
   }
 
+  /**
+   * The A / X face button raises no WebXR events, so poll it each frame and toggle the
+   * procedure menu on the rising edge. Pressed on either controller counts.
+   */
+  private pollFaceButton() {
+    const session = this.globalObjectInstance.renderer.xr.getSession();
+    let down = false;
+    if (session) {
+      for (const source of session.inputSources) {
+        const buttons = source.gamepad?.buttons;
+        if (buttons && buttons.length > FACE_BUTTON_INDEX && buttons[FACE_BUTTON_INDEX]?.pressed) {
+          down = true;
+        }
+      }
+    }
+    if (down && !this.faceButtonWasDown) {
+      void this.procedureMenu.toggle();
+    }
+    this.faceButtonWasDown = down;
+  }
   async onSessionStarted() {
     this.globalObjectInstance.camera = this.globalObjectInstance.ARCamera;
     this.globalObjectInstance.render = false;
@@ -161,8 +193,10 @@ export class ArInitiator {
 
     this.baseReferenceSpace = null;
     this.twoHandDrag = null;
+    this.faceButtonWasDown = false;
     if (this.controller1) this.controller1.userData.selecting = false;
     if (this.controller2) this.controller2.userData.selecting = false;
+    this.procedureMenu.dispose();
     this.removeWorldOriginMarker();
   }
 
@@ -254,7 +288,10 @@ export class ArInitiator {
       const reticle = controller?.userData.pointerReticle as THREE.Mesh | undefined;
       if (!ray || !reticle) continue;
 
-      const hit = controller.userData.selected || this.twoHandDrag ? undefined : this.intersectDragObjects(controller)[0];
+      const hit =
+        controller.userData.selected || this.twoHandDrag
+          ? undefined
+          : (this.procedureMenu.raycastRows(controller) ?? this.intersectDragObjects(controller)[0]);
       if (hit) {
         ray.scale.z = hit.distance;
         reticle.position.set(0, 0, -hit.distance);
@@ -275,6 +312,12 @@ export class ArInitiator {
    */
   onSelectStart(controller: any) {
     controller.userData.selecting = true;
+
+    // While the procedure menu is open the trigger picks a menu row, nothing else.
+    if (this.procedureMenu.open) {
+      this.procedureMenu.handleSelect(controller);
+      return;
+    }
 
     const otherController = controller === this.controller1 ? this.controller2 : this.controller1;
 
