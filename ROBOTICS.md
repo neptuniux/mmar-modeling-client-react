@@ -6,6 +6,7 @@ becomes a command a machine can run.
 This is the companion to [README.md](README.md), which covers the client as a whole. It
 documents one feature set that spans several metamodels, two stored procedures and a
 dozen modules — enough moving parts that "where do I change X?" is a fair question.
+For running a model in a headset laid over the real cell, see [AR.md](AR.md).
 
 ## Contents
 
@@ -182,7 +183,9 @@ surprising:
 3. **The controller's units** — often millimetres.
 
 `$$cmdpos` converts only the units: the canvas coordinates *are* the command. Use it when
-the model is laid over the real cell (AR), where the two spaces are the same space.
+the model is laid over the real cell in [AR](AR.md#world-origin-calibration), where the
+world origin has been calibrated onto the robot's base and the two spaces are the same
+space.
 
 `$$robotpos` also re-expresses the point against the arm's base, using the Pool's
 placement and the Configuration system's base frame. Use it when the model's origin is
@@ -270,3 +273,9 @@ drops them. What survives a save:
 - **The Pool's robot is a copy**, drawn from the referenced scene's meshes. It carries no
   instance uuids, is never added to `dragObjects`, and opts out of raycasting — a click
   on it selects the Pool.
+- **`executionProcedure` reaches the robot from the browser.** The command goes out over
+  HTTP/WS from wherever the client runs. When that is a Meta Quest and the robot sits on a
+  separate wired LAN, the headset cannot route to it and the HTTPS page cannot open a
+  plaintext connection — the machine running the dev server has to bridge (a `/robot`
+  entry in `vite.config.ts`'s `server.proxy`, mirroring `/api` and `/sync`). Not wired up
+  in this repo; see [AR.md → Limits worth knowing](AR.md#limits-worth-knowing).

@@ -28,6 +28,10 @@ and the toolbar buttons) — see [Undo/redo](#undoredo).
 For the URDF/robotics and BPMN-execution feature set — importing a robot, drawing it in a
 Pool, and turning a Task into a command a machine runs — see **[ROBOTICS.md](ROBOTICS.md)**.
 
+For the AR/WebXR session — entering it, serving it to a Meta Quest over HTTPS, the
+controller/hand controls, calibrating the model onto a real workcell, and the in-headset
+procedure menu — see **[AR.md](AR.md)**.
+
 ## Tech stack
 
 | Concern        | Choice                                              |
@@ -63,6 +67,8 @@ src/
     graphic-context.ts        # the `gc` API every stored vizRep code string is evaluated against
     interaction-handler.ts    # the 5-mode interaction state machine
     hybrid-algorithms/        # robotics/URDF + statechange + objectspace + the hybrid service
+    ar-initiator.ts           # WebXR session + controller/hand input + world-origin calibration (see AR.md)
+    ar-procedure-menu.ts      # the floating 3D procedure list, opened with the controller A/X button
     ...                       # animator, initiator, coordinates-updater, deletion/creation handlers, ...
   resources/
     services/                 # framework-agnostic TS: api, backend-service, *-utility, event-bus, logger
@@ -184,6 +190,20 @@ Set them in `.env` / `.env.development`. The **browser** runs on the host, so ke
 `mmar-sync-server:8060` are the reachable hostnames (used only for server-side curl
 and the live integration tests — `localhost:8000` does not resolve in-container).
 
+A second group is read by **`vite.config.ts`** itself (via `loadEnv`, *not* through
+`config.ts`) to serve the client over HTTPS from one origin — what the Meta Quest
+browser needs to expose "Enter VR". See [AR.md → Serving it to a Meta Quest](AR.md#serving-it-to-a-meta-quest).
+
+| Var | Default | Meaning |
+| --- | --- | --- |
+| `PORT` | `8085` | dev-server / preview port |
+| `VITE_HTTPS_PROXY` | *(unset)* | `true` ⇒ serve HTTPS (cert from `../certs/dev-{cert,key}.pem`) and reverse-proxy `/api` + `/sync` through the same origin |
+| `VITE_PROXY_API_TARGET` | `http://mmar-server:8000` | `/api` upstream (override when the client runs outside Docker) |
+| `VITE_PROXY_SYNC_TARGET` | `ws://mmar-sync-server:8060` | `/sync` upstream |
+
+With `VITE_HTTPS_PROXY=true`, point the client at the proxy paths:
+`VITE_API_URL=https://<ip>:<port>/api`, `VITE_SYNC_URL=wss://<ip>:<port>/sync`.
+
 ## Run / build
 
 ```bash
@@ -201,6 +221,10 @@ npm run lint       # eslint src --ext .ts,.tsx
 
 Log in with the dev credentials `admin` / `admin`. The app needs `mmar-server`
 (REST, `:8000`) and, for collaboration, `mmar-sync-server` (yjs, `:8060`) reachable.
+
+To view a scene in a **Meta Quest** headset, serve over HTTPS from one origin
+(`VITE_HTTPS_PROXY=true`, the config table above) and open `https://<lan-ip>:<port>`
+on the headset — full walkthrough in [AR.md](AR.md).
 
 ### Testing notes
 
@@ -231,3 +255,7 @@ lives, and several are pinned by tests. Read the comment before "fixing" one:
   mechanism and procedure code strings stored in the DATABASE call them positionally.
   Methods there are kept even when nothing in this repository calls them, and must not be
   renamed or have parameters inserted.
+- **AR edits do not persist.** Moving an instance inside a WebXR session redraws it and
+  re-routes its relations, but the coordinate write-back is gated to the normal camera —
+  so the change never auto-saves or syncs. The world-origin calibration is the exception
+  (localStorage). See [AR.md](AR.md#limits-worth-knowing).
