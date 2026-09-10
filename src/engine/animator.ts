@@ -41,6 +41,13 @@ import { describeError } from "@/resources/util/describe-error";
 
   async animate() {
     if (this.globalObjectInstance.camera == this.globalObjectInstance.ARCamera) {
+      // Re-route relation lines and re-glue ports to their parent class while objects
+      // are moved in AR. The desktop block below is gated to the normal camera, so
+      // without this an object grabbed with a controller drags its relations nowhere.
+      if (this.globalObjectInstance.tabContext.length > 0) {
+        await this.updateMovedObjectsInAr();
+      }
+
       this.globalObjectInstance.renderer.render(this.globalObjectInstance.scene, this.globalObjectInstance.camera);
       //hook to check mechanisms
       if (this.globalObjectInstance.runMechanism) {
@@ -148,6 +155,49 @@ import { describeError } from "@/resources/util/describe-error";
       if (this.globalObjectInstance.camera == this.globalObjectInstance.normalCamera) this.globalObjectInstance.orbitControls.update();
     }
 
+  }
+
+  /**
+   * AR counterpart of the normal-camera move-detection block in `animate()`.
+   *
+   * The desktop block is guarded by `camera == normalCamera`, so in an AR session none
+   * of it runs: a class grabbed with a controller moves, but its relation lines and
+   * child ports never follow. This mirrors just the parts that matter for that — the
+   * per-object `userData.update()` (ports) and re-routing every relation line through
+   * `setPos` when a draggable object has moved since the last frame. Coordinate
+   * write-back to the gds instances is deliberately left to the desktop path.
+   *
+   * Detection compares WORLD positions, not `element.position`: grabbing an object
+   * reparents it under the controller (`controller.attach`), which freezes its local
+   * position — only its world position keeps changing as the hand moves. The snapshot
+   * is kept in its own field so it never collides with the desktop block's
+   * local-space `allPositions`.
+   */
+  private arLastWorldPositions: number[] = [];
+
+  private async updateMovedObjectsInAr() {
+    const tempWorldPositions: number[] = [];
+    const worldPosition = new THREE.Vector3();
+    for (const element of this.globalObjectInstance.dragObjects) {
+      element.getWorldPosition(worldPosition);
+      tempWorldPositions.push(worldPosition.x, worldPosition.y, worldPosition.z);
+      if (element.userData.update) {
+        //ports re-glue to their parent class the same way as on desktop
+        element.userData.update();
+      }
+    }
+
+    const moved = this.arraysMatch(tempWorldPositions, this.arLastWorldPositions) == false;
+    this.arLastWorldPositions = tempWorldPositions;
+
+    if (!moved && !this.globalStateObject.activeStateLine && !this.globalObjectInstance.objectScaled) return;
+
+    for (const element of this.globalObjectInstance.updateLinesArray) {
+      if (element.userData.relObj.length > 1) {
+        await this.setPos(element);
+      }
+    }
+    this.globalObjectInstance.objectScaled = false;
   }
 
   //check if two arrays are the same
