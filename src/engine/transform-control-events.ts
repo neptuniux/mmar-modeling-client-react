@@ -24,16 +24,17 @@ import { publishLocalChange } from "@/resources/collaboration/local-change-publi
 
 /**
  * Counter-scale every descendant of `object` that does not carry its own explicit
- * scale, so a label (or anything else attached as a plain child) keeps a constant
- * absolute size when `object` itself is resized — a child with its own persisted
+ * scale, so anything attached as a plain child keeps a constant absolute size when
+ * `object` itself is resized — a child with its own persisted
  * `custom_variables.scale` is left alone instead.
+ *
+ * Labels (`userData.isLabel`, set by `graphic-context.graphic_text`) are the
+ * exception: they are pinned to identity so they inherit the parent's scale and
+ * grow/shrink WITH the object.
  *
  * Shared by every UI that can resize a mesh (the scale gizmo here, and the Position
  * panel's numeric Scale field) so they all leave the object in the same state that
- * `graphic-context.setScale` recreates when the scene is reloaded — otherwise a resize
- * that skips this step looks right live (the label just shrinks with its parent) but
- * balloons back up on reload, when the label counter-scale gets applied for the first
- * time against an already-small persisted scale.
+ * `graphic-context.setScale` recreates when the scene is reloaded.
  *
  * A no-op when `object` is not a real three.js Object3D (e.g. a plain test double)
  * rather than assuming `userData` / `traverse` exist.
@@ -49,6 +50,12 @@ export function counterScaleChildren(object: THREE.Object3D): void {
   object.userData.custom_variables.scale = object.scale;
   object.traverse((child: THREE.Object3D) => {
     if (child == object) return;
+    // Labels scale WITH the object: keep them at identity so they inherit the
+    // parent's scale instead of being counter-scaled to a constant size.
+    if (child.userData?.isLabel) {
+      child.scale.set(1, 1, 1);
+      return;
+    }
     const ownScale: THREE.Vector3 | undefined = child.userData?.custom_variables?.["scale"];
     if (ownScale) {
       child.scale.set(ownScale.x, ownScale.y, ownScale.z);

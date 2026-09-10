@@ -594,6 +594,12 @@ function applyScaleToThreeObject(object: THREE.Object3D, scale: { x: number; y: 
   object.scale.set(scale.x, scale.y, scale.z);
   object.traverse((child: THREE.Object3D) => {
     if (child === object) return;
+    // Labels scale WITH the object: keep them at identity so they inherit the
+    // parent's scale instead of being counter-scaled to a constant size.
+    if (child.userData?.isLabel) {
+      child.scale.set(1, 1, 1);
+      return;
+    }
     const cv = child.userData?.custom_variables;
     if (!cv || !("scale" in cv)) {
       const inverse = new THREE.Vector3(1, 1, 1).divide(object.scale);

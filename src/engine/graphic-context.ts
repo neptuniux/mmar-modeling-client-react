@@ -332,6 +332,10 @@ export class GraphicContext {
     textMesh.name = att + textMesh.uuid;
     textMesh.anchorX = "center";
     textMesh.anchorY = "middle";
+    // Marks this child as a vizRep label so the scale passes let it inherit its
+    // parent's scale (scale WITH the object) instead of counter-scaling it to a
+    // constant absolute size. See setScale / counterScaleChildren.
+    textMesh.userData.isLabel = true;
 
     // Set properties to configure:
     textMesh.text = att;
@@ -978,6 +982,12 @@ export class GraphicContext {
     //if they have their own scale they are ignored for rescaling relative to parent
     object.traverse((child: THREE.Object3D) => {
       if (child != object) {
+        // Labels scale WITH the object: leave them at identity so they inherit
+        // the parent's scale through the scene graph.
+        if (child.userData?.isLabel) {
+          child.scale.set(1, 1, 1);
+          return;
+        }
         const newScale: THREE.Vector3 = new THREE.Vector3(1, 1, 1).divide(object.scale);
         if (!child.userData || !("custom_variables" in child.userData) || !("key" in child.userData.custom_variables)) {
           child.scale.set(newScale.x, newScale.y, newScale.z);

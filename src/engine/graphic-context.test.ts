@@ -154,6 +154,28 @@ describe("drawVizRep", () => {
   });
 });
 
+describe("setScale", () => {
+  it("lets a label inherit the parent scale while counter-scaling plain children", async () => {
+    const classInstance = makeClassInstance();
+    fakeGlobal.globalObject.current_class_instance = classInstance;
+    (classInstance.custom_variables as Record<string, unknown>).scale = { x: 2, y: 2, z: 2 };
+
+    await graphicContext.runVizRepFunction(CUBE_WITH_LABEL_VIZREP);
+    const object = await graphicContext.drawVizRep(new THREE.Vector3(0, 0, 0), classInstance);
+
+    expect(object.scale.toArray()).toEqual([2, 2, 2]);
+
+    const label = object.userData.Label[0] as THREE.Object3D;
+    expect(label.userData.isLabel).toBe(true);
+    // Identity local scale -> the label renders at the parent's 2x through the scene graph.
+    expect(label.scale.toArray()).toEqual([1, 1, 1]);
+
+    // A plain child (the button) is counter-scaled so it keeps its absolute size.
+    const button = object.children.find((c) => c.userData.isButton)!;
+    expect(button.scale.toArray().map((v) => Number(v.toFixed(3)))).toEqual([0.5, 0.5, 0.5]);
+  });
+});
+
 describe("deleteObject", () => {
   it("removes the mesh from the scene and from the drag/button arrays", async () => {
     const classInstance = makeClassInstance();
